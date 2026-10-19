@@ -65,4 +65,6 @@
 - [阶段状态与下一阶段任务](docs/roadmap.md)：菜单栏、通知、诊断深度和 Windows 槽位。
 - [本机验证记录](docs/validation.md)：实测与未验证边界。
 
-本地 Git 仓库已初始化，未建立远程仓库或提交发布。
+## 许可证
+
+[MIT](LICENSE)。
