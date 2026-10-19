@@ -1,0 +1,22 @@
+[package]
+name = "hostwatch"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.79"
+description = "Low-overhead, read-only host diagnostics; macOS first"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+# Keep the collector compatible with the project's Rust 1.79 baseline.
+sysinfo = { version = "=0.30.13", default-features = false }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
