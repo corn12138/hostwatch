@@ -14,6 +14,11 @@ fn take_if<T: Send + 'static>(job: &RefCell<Option<Job<T>>>, wait: bool) -> Opti
 impl Controller {
     pub(super) fn navigate(&self, route: Route) {
         let mut routes = self.ivars().routes.borrow_mut();
+        // A new analysis replaces the one on screen instead of stacking a second optimize page.
+        if matches!(route, Route::Optimize(_)) && matches!(routes.last(), Some(Route::Optimize(_)))
+        {
+            routes.pop();
+        }
         if let Some(i) = routes.iter().position(|r| *r == route) {
             routes.truncate(i + 1);
         } else {

@@ -1,0 +1,55 @@
+import AppKit
+
+final class Delegate: NSObject, NSApplicationDelegate {
+    let mode: String
+    var hold: UnsafeMutableRawPointer?
+    init(mode: String) { self.mode = mode }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard mode == "hog" else { return }
+        let size = 2 << 30
+        let memory = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16384)
+        var offset = 0
+        while offset < size {
+            memory.storeBytes(of: UInt8(offset & 0xff), toByteOffset: offset, as: UInt8.self)
+            offset += 4096
+        }
+        hold = memory
+        for _ in 0..<2 {
+            Thread.detachNewThread {
+                var x = 1.0
+                while true { x = x * 1.0000001 + 1; if x > 1e300 { x = 1 } }
+            }
+        }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        switch mode {
+        case "refuse":
+            return .terminateCancel
+        case "prompt":
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Hostwatch 测试：有未保存的更改"
+                alert.addButton(withTitle: "保存")
+                alert.addButton(withTitle: "取消")
+                let log = "/private/tmp/claude-501/-Users-huangyuming-Desktop-monitor-Mac-Windows/a03d17f1-4be1-4929-9662-2329a811ed67/scratchpad/testapps/prompt.log"
+                let shown = Date()
+                let answer = alert.runModal()
+                let line = "alert shown \(shown), returned \(Date()) answer \(answer.rawValue) (1000 = 保存, 1001 = 取消)\n"
+                try? line.write(toFile: log, atomically: true, encoding: .utf8)
+                NSApp.reply(toApplicationShouldTerminate: answer == .alertFirstButtonReturn)
+            }
+            return .terminateLater
+        default:
+            return .terminateNow
+        }
+    }
+}
+
+let mode = Bundle.main.bundleIdentifier?.components(separatedBy: ".").last ?? "hog"
+let app = NSApplication.shared
+app.setActivationPolicy(.regular)
+let delegate = Delegate(mode: mode)
+app.delegate = delegate
+app.run()

@@ -1,0 +1,17 @@
+[09:14:38] launched HWTest-hog: true
+[09:14:38] launched HWTest-prompt: true
+[09:14:38] launched HWTest-refuse: true
+[09:14:54] BEFORE: last samples [93s: used=33.95GiB cpu=Some(38.0) | 88s: used=33.94GiB cpu=Some(36.0)]; HWTest-hog footprint MiB Some(2059)
+[09:14:58] cpu plan: 4 candidates; hog rank Some(0) cpu Some(200.0) selected Some(true)
+[09:15:01] memory plan: 5 candidates; hog rank Some(3) footprint MiB Some(2059) selected Some(false)
+[09:15:01] quit test only on test apps: kept ["HWTest-hog", "HWTest-prompt", "HWTest-refuse"]; your apps removed from the list: 4
+[09:15:01] click QuitSelected title="退出所选的 3 个应用" enabled=true hit_test_topmost=true
+[09:15:01] after quit click: Some(Applied { group: Memory, at: 1792502101, outcomes: [QuitOutcome { pid: 7414, name: "HWTest-hog", state: Requested }, QuitOutcome { pid: 7431, name: "HWTest-prompt", state: Requested }, QuitOutcome { pid: 7448, name: "HWTest-refuse", state: Requested }] })
+[09:15:25] after re-checks: Some(Applied { group: Memory, at: 1792502101, outcomes: [QuitOutcome { pid: 7414, name: "HWTest-hog", state: Quit }, QuitOutcome { pid: 7431, name: "HWTest-prompt", state: Quit }, QuitOutcome { pid: 7448, name: "HWTest-refuse", state: StillRunning }] })
+[09:15:25] HWTest-hog running per pgrep: false
+[09:15:25] HWTest-prompt running per pgrep: false
+[09:15:25] HWTest-refuse running per pgrep: true
+[09:15:33] AFTER: last samples [133s: used=31.52GiB cpu=Some(19.0) | 128s: used=31.56GiB cpu=Some(21.0)]; HWTest-hog footprint MiB None
+[09:15:34] quit via More menu item
+exit=0
+no leftover process

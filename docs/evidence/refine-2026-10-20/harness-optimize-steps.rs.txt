@@ -1,0 +1,209 @@
+#![allow(dead_code, unused_imports)]
+use super::*;
+use crate::model::*;
+use crate::panel::Resource;
+use objc2_app_kit::NSAppearanceCustomization;
+use objc2_app_kit::{NSAppearance, NSAppearanceNameDarkAqua, NSBitmapImageFileType, NSEvent, NSEventModifierFlags, NSEventType, NSWindowOrderingMode};
+use std::io::Write;
+
+thread_local! {
+    static STEP: Cell<usize> = const { Cell::new(0) };
+    static CTRL: RefCell<Option<Retained<Controller>>> = const { RefCell::new(None) };
+    static MARK: Cell<usize> = const { Cell::new(0) };
+}
+
+fn out() -> String { std::env::var("HW_HARNESS_OUT").unwrap() }
+
+pub fn note(line: String) { if std::env::var("HW_HARNESS_OUT").is_ok() { log(line) } }
+
+fn log(line: String) {
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(format!("{}/journey.log", out())).unwrap();
+    writeln!(f, "[{}] {line}", panel::clock(now_unix())).unwrap();
+}
+
+thread_local! { static OPENS: Cell<u32> = const { Cell::new(0) }; }
+
+pub fn start(ctrl: &Retained<Controller>) {
+    if std::env::var("HW_OPENS").is_ok() {
+        let t = unsafe { NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(std::env::var("HW_OPENS_START").ok().and_then(|v| v.parse().ok()).unwrap_or(60.0), &**ctrl, sel!(opensStep:), None, false) };
+        unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&t, NSRunLoopCommonModes) };
+        return;
+    }
+    if std::env::var("HW_HARNESS_OUT").is_err() { return; }
+    CTRL.with(|c| *c.borrow_mut() = Some(ctrl.clone()));
+    later(ctrl, 1.0);
+}
+
+fn later(ctrl: &Controller, seconds: f64) {
+    let timer = unsafe { NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(seconds, ctrl, sel!(harnessStep:), None, false) };
+    unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
+}
+
+fn state(c: &Controller) -> String {
+    let m = c.ivars().monitor.borrow();
+    let now = now_unix();
+    let latest = m.current().map(|l| format!("{:?} cpu={:?}", l.snapshot.activity.status, l.snapshot.activity.cpu_busy_percent.map(|v| (v * 10.0).round() / 10.0))).unwrap_or("none".into());
+    format!("health={:?} routes={:?} paused={} interval={} timer={} history={} latest={} shown={} conclusion={:?}",
+        m.health(now), c.ivars().routes.borrow(), m.paused(), m.interval(),
+        c.ivars().timer.borrow().as_ref().map_or("none".to_string(), |t| format!("{:.0}s", t.timeInterval())),
+        m.history().len(), latest, c.shown(), panel::conclusion(&m, now).1)
+}
+
+fn capture(c: &Controller, name: &str) {
+    let (Some(root), Some(scroll)) = (c.ivars().root.get(), c.ivars().scroll.get()) else { return };
+    let mtm = c.mtm();
+    let shot = |view: &NSView, file: &str| {
+        let bg = ShapeView::new(mtm, Shape::Fill, view.bounds());
+        view.addSubview_positioned_relativeTo(&bg, NSWindowOrderingMode::Below, None);
+        let b = view.bounds();
+        if let Some(rep) = view.bitmapImageRepForCachingDisplayInRect(b) {
+            view.cacheDisplayInRect_toBitmapImageRep(b, &rep);
+            let props = NSDictionary::new();
+            if let Some(data) = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) } {
+                std::fs::write(format!("{}/{file}", out()), data.to_vec()).unwrap();
+            }
+        }
+        bg.removeFromSuperview();
+    };
+    shot(root, &format!("{name}.png"));
+    if let Some(doc) = scroll.documentView() {
+        if doc.bounds().size.height > scroll.frame().size.height + 1.0 {
+            shot(&doc, &format!("{name}-full.png"));
+        }
+    }
+    log(format!("captured {name}"));
+}
+
+fn click(c: &Controller, command: &Command) -> bool {
+    let Some(root) = c.ivars().root.get() else { return false };
+    let index = c.ivars().commands.borrow().iter().position(|x| x == command);
+    let Some(view) = index.and_then(|i| root.viewWithTag(i as isize + 1)) else {
+        log(format!("click {command:?}: control not found; index={index:?} commands={:?}", c.ivars().commands.borrow()));
+        return false;
+    };
+    let button = view.downcast::<NSButton>().unwrap();
+    // Real hit test at the control's center in window coordinates.
+    let b = button.bounds();
+    let p = button.convertPoint_toView(NSPoint::new(b.size.width / 2.0, b.size.height / 2.0), None);
+    let hit = root.window().and_then(|w| w.contentView()).and_then(|cv| unsafe { cv.superview() }.or(Some(cv))).and_then(|frame| frame.hitTest(p));
+    let topmost = hit.as_deref().map_or(false, |h| std::ptr::eq(h, &**button as &NSView));
+    log(format!("click {command:?} title={:?} enabled={} hit_test_topmost={topmost}", button.title().to_string(), button.isEnabled()));
+    unsafe { button.performClick(None) };
+    true
+}
+
+fn key_escape(c: &Controller) {
+    let Some(window) = c.ivars().root.get().and_then(|r| r.window()) else { log("escape: no window".into()); return };
+    let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+        NSEventType::KeyDown, NSPoint::new(0.0, 0.0), NSEventModifierFlags(0), 0.0, window.windowNumber(), None,
+        ns_string!("\u{1b}"), ns_string!("\u{1b}"), false, 53).unwrap();
+    log(format!("send Escape keyDown; first responder is root: {}", window.firstResponder().map_or(false, |r| std::ptr::eq(&*r as *const _ as *const u8, &**c.ivars().root.get().unwrap() as *const _ as *const u8))));
+    window.sendEvent(&event);
+}
+
+fn menu(c: &Controller, tag: isize) {
+    let item = NSMenuItem::new(c.mtm());
+    item.setTag(tag);
+    unsafe { let _: () = msg_send![c, menuPerform: &*item]; }
+}
+
+
+fn test_apps() -> String { "/private/tmp/claude-501/-Users-huangyuming-Desktop-monitor-Mac-Windows/a03d17f1-4be1-4929-9662-2329a811ed67/scratchpad/testapps".into() }
+
+fn metrics(c: &Controller) -> String {
+    let m = c.ivars().monitor.borrow();
+    let recent: Vec<String> = m.history().samples().rev().take(2).map(|s| format!("{}s: used={:.2}GiB cpu={:?}", s.unix_seconds % 1000, s.memory_used_bytes.unwrap_or(0) as f64 / (1u64 << 30) as f64, s.cpu_busy_percent.map(|v| v.round()))).collect();
+    let hog = crate::platform::process_table().ok().and_then(|t| t.readable.iter().find(|p| p.name.starts_with("HWTest-hog")).map(|p| p.footprint >> 20));
+    format!("last samples [{}]; HWTest-hog footprint MiB {:?}", recent.join(" | "), hog)
+}
+
+fn running(name: &str) -> bool {
+    std::process::Command::new("pgrep").args(["-x", name]).status().map(|s| s.success()).unwrap_or(false)
+}
+
+impl Controller {
+    pub(crate) fn opens_step(&self) {}
+
+    pub(crate) fn harness_step(&self) {
+        let step = STEP.with(|s| { let v = s.get(); s.set(v + 1); v });
+        let next = |s: f64| later(self, s);
+        match step {
+            0 => {
+                for m in ["hog", "prompt", "refuse"] {
+                    let ok = std::process::Command::new("open").args(["-g", "-n", &format!("{}/HWTest-{m}.app", test_apps())]).status().map(|s| s.success()).unwrap_or(false);
+                    log(format!("launched HWTest-{m}: {ok}"));
+                }
+                next(16.0)
+            }
+            1 => {
+                log(format!("BEFORE: {}", metrics(self)));
+                if !self.shown() { self.toggle_popover(); }
+                self.handle(Command::Optimize(Group::Cpu));
+                next(3.0)
+            }
+            2 => {
+                if let Some(crate::optimize::Optimization::Ready { candidates, .. }) = self.ivars().monitor.borrow().optimizer().state() {
+                    let hog = candidates.iter().find(|c| c.name.starts_with("HWTest-hog"));
+                    log(format!("cpu plan: {} candidates; hog rank {:?} cpu {:?} selected {:?}", candidates.len(), candidates.iter().position(|c| c.name.starts_with("HWTest-hog")), hog.map(|c| c.cpu_percent.round()), hog.map(|c| c.selected)));
+                }
+                self.handle(Command::Optimize(Group::Memory));
+                next(3.0)
+            }
+            3 => {
+                let mut kept = Vec::new();
+                let mut dropped = 0;
+                {
+                    let m = self.ivars().monitor.borrow();
+                    if let Some(crate::optimize::Optimization::Ready { candidates, .. }) = m.optimizer().state() {
+                        let hog = candidates.iter().find(|c| c.name.starts_with("HWTest-hog"));
+                        log(format!("memory plan: {} candidates; hog rank {:?} footprint MiB {:?} selected {:?}", candidates.len(), candidates.iter().position(|c| c.name.starts_with("HWTest-hog")), hog.map(|c| c.footprint_bytes >> 20), hog.map(|c| c.selected)));
+                        for c in candidates {
+                            if c.bundle_id.as_deref().is_some_and(|b| b.starts_with("dev.hostwatch.test.")) { kept.push(c.clone()); } else { dropped += 1; }
+                        }
+                    }
+                }
+                // The prompt and refuse apps are small, so add them explicitly for the quit test.
+                for app in NSWorkspace::sharedWorkspace().runningApplications().iter() {
+                    let id = app.bundleIdentifier().map(|b| b.to_string()).unwrap_or_default();
+                    if (id == "dev.hostwatch.test.prompt" || id == "dev.hostwatch.test.refuse") && !kept.iter().any(|c| c.bundle_id.as_deref() == Some(id.as_str())) {
+                        kept.push(Candidate { pid: app.processIdentifier() as u32, name: app.localizedName().map(|n| n.to_string()).unwrap_or_default(), bundle_id: Some(id), footprint_bytes: 0, cpu_percent: 0.0, processes: 1, active: false, selected: true });
+                    }
+                }
+                for c in &mut kept { c.selected = true; }
+                log(format!("quit test only on test apps: kept {:?}; your apps removed from the list: {dropped}", kept.iter().map(|c| c.name.clone()).collect::<Vec<_>>()));
+                {
+                    let mut m = self.ivars().monitor.borrow_mut();
+                    let o = m.optimizer_mut();
+                    o.begin(Group::Memory, now_unix());
+                    o.finish(Ok(kept), now_unix());
+                }
+                self.navigate(Route::Optimize(Group::Memory));
+                self.render(false);
+                capture(self, "30-optimize-test-apps");
+                click(self, &Command::QuitSelected);
+                log(format!("after quit click: {:?}", self.ivars().monitor.borrow().optimizer().state()));
+                next(24.0)
+            }
+            4 => {
+                log(format!("after re-checks: {:?}", self.ivars().monitor.borrow().optimizer().state()));
+                for m in ["hog", "prompt", "refuse"] {
+                    log(format!("HWTest-{m} running per pgrep: {}", running(&format!("HWTest-{m}"))));
+                }
+                if !self.shown() { self.toggle_popover(); }
+                self.navigate(Route::Optimize(Group::Memory));
+                self.render(false);
+                capture(self, "31-optimize-outcomes");
+                next(8.0)
+            }
+            5 => {
+                log(format!("AFTER: {}", metrics(self)));
+                // Clean up the test apps that kept running (they are ours).
+                for m in ["prompt", "refuse"] {
+                    let _ = std::process::Command::new("pkill").args(["-9", "-x", &format!("HWTest-{m}")]).status();
+                }
+                next(1.0)
+            }
+            _ => { log("quit via More menu item".into()); menu(self, MENU_QUIT); }
+        }
+    }
+}
