@@ -1,0 +1,11 @@
+[09:47:40] BEFORE: last samples [58s: used=33.32GiB cpu=Some(27.0) | 53s: used=33.27GiB cpu=Some(20.0)]; Telegram processes footprint MiB Some(238); Telegram (processes, footprint MiB) Some((1, 238))
+[09:47:43] Telegram found in the real analysis of 5 apps: [(238, 1)]
+[09:47:43] quitting only: ["Telegram"] (bundle ids [Some("ru.keepcoder.Telegram")])
+[09:47:43] popover shown before click: true
+[09:47:43] click QuitSelected title="退出所选的 1 个应用" enabled=true hit_test_topmost=true
+[09:47:44] after quit click: Some(Applied { group: Memory, at: 1792504063, outcomes: [QuitOutcome { pid: 76936, name: "Telegram", state: Requested }] })
+[09:48:08] after re-checks: Some(Applied { group: Memory, at: 1792504063, outcomes: [QuitOutcome { pid: 76936, name: "Telegram", state: Quit }] })
+[09:48:08] Telegram running per pgrep: false
+[09:48:20] AFTER: last samples [98s: used=33.70GiB cpu=Some(30.0) | 93s: used=33.58GiB cpu=Some(23.0)]; Telegram processes footprint MiB None; Telegram (processes, footprint MiB) Some((0, 0))
+[09:48:20] quit via More menu item
+exit=0
