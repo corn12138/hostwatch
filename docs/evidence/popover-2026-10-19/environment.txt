@@ -1,0 +1,10 @@
+date: 2026-10-20T03:24:04Z
+ProductName:		macOS
+ProductVersion:		27.2
+BuildVersion:		26B5112a
+arm64
+51539607552
+16
+Apple M3 Max
+git HEAD: 81d8fa6 (working tree dirty; evidence taken before the release commit)
+b24c5e5e2266d5b8a03aa442555290a4b30fc0bbee44bcc7014ee4a5d4284c61  dist/Hostwatch-0.1.0-macos-arm64.zip

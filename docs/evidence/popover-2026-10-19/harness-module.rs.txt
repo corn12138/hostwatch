@@ -1,0 +1,201 @@
+mod harness {
+    use super::*;
+    use crate::model::*;
+    use crate::panel::Resource;
+    use objc2_app_kit::NSAppearanceCustomization;
+    use objc2_app_kit::{NSAppearance, NSAppearanceNameDarkAqua, NSBitmapImageFileType, NSEvent, NSEventModifierFlags, NSEventType, NSWindowOrderingMode};
+    use std::io::Write;
+
+    thread_local! {
+        static STEP: Cell<usize> = const { Cell::new(0) };
+        static CTRL: RefCell<Option<Retained<Controller>>> = const { RefCell::new(None) };
+        static MARK: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn out() -> String { std::env::var("HW_HARNESS_OUT").unwrap() }
+
+    pub fn note(line: String) { if std::env::var("HW_HARNESS_OUT").is_ok() { log(line) } }
+
+    fn log(line: String) {
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(format!("{}/journey.log", out())).unwrap();
+        writeln!(f, "[{}] {line}", panel::clock(now_unix())).unwrap();
+    }
+
+    thread_local! { static OPENS: Cell<u32> = const { Cell::new(0) }; }
+
+    pub fn start(ctrl: &Retained<Controller>) {
+        if std::env::var("HW_OPENS").is_ok() {
+            let t = unsafe { NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(std::env::var("HW_OPENS_START").ok().and_then(|v| v.parse().ok()).unwrap_or(60.0), &**ctrl, sel!(opensStep:), None, false) };
+            unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&t, NSRunLoopCommonModes) };
+            return;
+        }
+        if std::env::var("HW_HARNESS_OUT").is_err() { return; }
+        CTRL.with(|c| *c.borrow_mut() = Some(ctrl.clone()));
+        later(ctrl, 1.0);
+    }
+
+    fn later(ctrl: &Controller, seconds: f64) {
+        let timer = unsafe { NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(seconds, ctrl, sel!(harnessStep:), None, false) };
+        unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
+    }
+
+    fn state(c: &Controller) -> String {
+        let m = c.ivars().monitor.borrow();
+        let now = now_unix();
+        let latest = m.current().map(|l| format!("{:?} cpu={:?}", l.snapshot.activity.status, l.snapshot.activity.cpu_busy_percent.map(|v| (v * 10.0).round() / 10.0))).unwrap_or("none".into());
+        format!("health={:?} routes={:?} paused={} interval={} timer={} history={} latest={} shown={} conclusion={:?}",
+            m.health(now), c.ivars().routes.borrow(), m.paused(), m.interval(),
+            c.ivars().timer.borrow().as_ref().map_or("none".to_string(), |t| format!("{:.0}s", t.timeInterval())),
+            m.history().len(), latest, c.shown(), panel::conclusion(&m, now).1)
+    }
+
+    fn capture(c: &Controller, name: &str) {
+        let (Some(root), Some(scroll)) = (c.ivars().root.get(), c.ivars().scroll.get()) else { return };
+        let mtm = c.mtm();
+        let shot = |view: &NSView, file: &str| {
+            let bg = ShapeView::new(mtm, Shape::Fill, view.bounds());
+            view.addSubview_positioned_relativeTo(&bg, NSWindowOrderingMode::Below, None);
+            let b = view.bounds();
+            if let Some(rep) = view.bitmapImageRepForCachingDisplayInRect(b) {
+                view.cacheDisplayInRect_toBitmapImageRep(b, &rep);
+                let props = NSDictionary::new();
+                if let Some(data) = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) } {
+                    std::fs::write(format!("{}/{file}", out()), data.to_vec()).unwrap();
+                }
+            }
+            bg.removeFromSuperview();
+        };
+        shot(root, &format!("{name}.png"));
+        if let Some(doc) = scroll.documentView() {
+            if doc.bounds().size.height > scroll.frame().size.height + 1.0 {
+                shot(&doc, &format!("{name}-full.png"));
+            }
+        }
+        log(format!("captured {name}"));
+    }
+
+    fn click(c: &Controller, command: &Command) -> bool {
+        let Some(root) = c.ivars().root.get() else { return false };
+        let index = c.ivars().commands.borrow().iter().position(|x| x == command);
+        let Some(view) = index.and_then(|i| root.viewWithTag(i as isize + 1)) else {
+            log(format!("click {command:?}: control not found; index={index:?} commands={:?}", c.ivars().commands.borrow()));
+            return false;
+        };
+        let button = view.downcast::<NSButton>().unwrap();
+        // Real hit test at the control's center in window coordinates.
+        let b = button.bounds();
+        let p = button.convertPoint_toView(NSPoint::new(b.size.width / 2.0, b.size.height / 2.0), None);
+        let hit = root.window().and_then(|w| w.contentView()).and_then(|cv| unsafe { cv.superview() }.or(Some(cv))).and_then(|frame| frame.hitTest(p));
+        let topmost = hit.as_deref().map_or(false, |h| std::ptr::eq(h, &**button as &NSView));
+        log(format!("click {command:?} title={:?} enabled={} hit_test_topmost={topmost}", button.title().to_string(), button.isEnabled()));
+        unsafe { button.performClick(None) };
+        true
+    }
+
+    fn key_escape(c: &Controller) {
+        let Some(window) = c.ivars().root.get().and_then(|r| r.window()) else { log("escape: no window".into()); return };
+        let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+            NSEventType::KeyDown, NSPoint::new(0.0, 0.0), NSEventModifierFlags(0), 0.0, window.windowNumber(), None,
+            ns_string!("\u{1b}"), ns_string!("\u{1b}"), false, 53).unwrap();
+        log(format!("send Escape keyDown; first responder is root: {}", window.firstResponder().map_or(false, |r| std::ptr::eq(&*r as *const _ as *const u8, &**c.ivars().root.get().unwrap() as *const _ as *const u8))));
+        window.sendEvent(&event);
+    }
+
+    fn menu(c: &Controller, tag: isize) {
+        let item = NSMenuItem::new(c.mtm());
+        item.setTag(tag);
+        unsafe { let _: () = msg_send![c, menuPerform: &*item]; }
+    }
+
+    fn snap(t: u64, pressure: Pressure, swap: f64, cpu: f64, disk_free: u64) -> Snapshot {
+        const G: u64 = 1 << 30;
+        Snapshot {
+            unix_seconds: t, platform: "fixture",
+            memory: Memory { total_bytes: 16 * G, breakdown: Some(MemoryBreakdown { used_bytes: 15 * G, app_bytes: 10 * G, wired_bytes: 3 * G, compressed_bytes: 2 * G, cached_files_bytes: G / 2, free_bytes: G / 4 }), swap: Some(Swap { total_bytes: 4 * G, used_bytes: 3 * G }), pressure },
+            activity: Activity { status: RateStatus::Ready, interval_seconds: Some(30.0), swap_in_bytes_per_second: Some(swap * 0.3 * 1048576.0), swap_out_bytes_per_second: Some(swap * 0.7 * 1048576.0), page_in_bytes_per_second: Some(0.0), cpu_busy_percent: Some(cpu) },
+            disk: Some(Disk { path: "/System/Volumes/Data".into(), total_bytes: 500 * G, available_bytes: disk_free * G }),
+            processes_requested: false, top_processes: vec![], sources: vec![], limitations: vec![],
+        }
+    }
+
+    fn fixture(c: &Controller, name: &str, build: impl FnOnce(&mut Monitor, u64), route: Route) {
+        let now = now_unix();
+        let mut m = Monitor::new(30);
+        build(&mut m, now);
+        *c.ivars().monitor.borrow_mut() = m;
+        *c.ivars().routes.borrow_mut() = if route == Route::Home { vec![Route::Home] } else { vec![Route::Home, route] };
+        c.render(true);
+        capture(c, &format!("fixture-{name}"));
+    }
+
+    impl Controller {
+        pub(super) fn opens_step(&self) {
+            let n = OPENS.with(|o| { let v = o.get(); o.set(v + 1); v });
+            let total: u32 = std::env::var("HW_OPENS").unwrap().parse().unwrap();
+            if n >= 2 * total {
+                if std::env::var("HW_SCAN").is_ok() { self.handle(Command::Go(Route::Processes)); self.handle(Command::RefreshProcesses); }
+                eprintln!("opens done {}", panel::clock(now_unix()));
+                return;
+            }
+            if n % 2 == 0 {
+                self.toggle_popover();
+                let routes = [Route::Home, Route::Detail(Resource::Memory), Route::Detail(Resource::Cpu), Route::Settings];
+                self.handle(Command::Go(routes[(n as usize / 2) % 4]));
+            } else if std::env::var("HW_HOLD").is_ok() { return; } else if let Some(p) = self.ivars().popover.get() { p.close(); }
+            let t = unsafe { NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(0.4, self, sel!(opensStep:), None, false) };
+            unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&t, NSRunLoopCommonModes) };
+        }
+
+        pub(super) fn harness_step(&self) {
+            let step = STEP.with(|s| { let v = s.get(); s.set(v + 1); v });
+            let next = |s: f64| later(self, s);
+            let m = |c: &Controller| c.ivars().monitor.borrow().history().len();
+            match step {
+                0 => { log(format!("launch: {}", state(self))); self.toggle_popover(); log(format!("opened: {}", state(self)));
+                    let aqua = NSAppearance::appearanceNamed(unsafe { objc2_app_kit::NSAppearanceNameAqua });
+                    self.ivars().popover.get().unwrap().setAppearance(aqua.as_deref()); self.ivars().root.get().unwrap().setAppearance(aqua.as_deref()); self.render(false);
+                    capture(self, "01-home-light"); next(0.5) }
+                1 => {
+                    let p = self.ivars().popover.get().unwrap();
+                    p.setAppearance(NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }).as_deref());
+                    self.ivars().root.get().unwrap().setAppearance(NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }).as_deref());
+                    self.render(false); capture(self, "02-home-dark");
+                    p.setAppearance(None); self.ivars().root.get().unwrap().setAppearance(None); self.render(false);
+                    next(0.3)
+                }
+                2 => { click(self, &Command::Go(Route::Detail(Resource::Memory))); log(format!("after click memory: {}", state(self))); capture(self, "03-memory"); next(0.3) }
+                3 => { key_escape(self); log(format!("after Escape: {}", state(self))); next(0.3) }
+                4 => { click(self, &Command::Go(Route::Detail(Resource::Cpu))); capture(self, "04-cpu"); click(self, &Command::Back); log(format!("after Back: {}", state(self))); next(0.3) }
+                5 => { click(self, &Command::Go(Route::Detail(Resource::Disk))); capture(self, "05-disk"); key_escape(self); log(format!("after Escape: {}", state(self))); next(0.3) }
+                6 => { menu(self, MENU_PROCESSES); log(format!("menu processes: {}", state(self))); capture(self, "06-processes-unread"); MARK.with(|x| x.set(m(self))); click(self, &Command::RefreshProcesses); capture(self, "07-processes-loading"); next(3.0) }
+                7 => {
+                    let s = match self.ivars().monitor.borrow().processes() { crate::monitor::Processes::Done(r) => match &r.outcome { Ok(s) => format!("ok top={} listed={} unreadable={} names={:?}", s.top.len(), s.listed, s.unreadable, s.top.iter().map(|p| (p.name.clone(), p.resident_bytes >> 20)).collect::<Vec<_>>()), Err(e) => format!("err {e}") }, other => format!("{other:?}") };
+                    log(format!("scan result: {s}; scan worker joined: {}", self.ivars().scan.borrow().is_none()));
+                    capture(self, "08-processes-done"); next(0.3)
+                }
+                8 => { menu(self, MENU_SETTINGS); capture(self, "09-settings"); click(self, &Command::SetInterval(10)); log(format!("after 10s: {}", state(self))); next(0.3) }
+                9 => { click(self, &Command::TogglePause); MARK.with(|x| x.set(m(self))); log(format!("paused: {}", state(self))); click(self, &Command::SetInterval(5)); log(format!("interval while paused: {}", state(self))); capture(self, "10-settings-paused"); next(12.0) }
+                10 => { let before = MARK.with(|x| x.get()); log(format!("after 12s paused: history {} -> {} ; {}", before, m(self), state(self))); click(self, &Command::Back); click(self, &Command::Back); log(format!("after Back x2: {}", state(self))); capture(self, "11-home-paused"); click(self, &Command::TogglePause); log(format!("resumed: {}", state(self))); capture(self, "12-home-resumed-warmup"); next(5.6) }
+                11 => { log(format!("5.6s after resume: {}", state(self))); capture(self, "13-home-after-baseline"); MARK.with(|x| x.set(m(self))); next(11.0) }
+                12 => { let before = MARK.with(|x| x.get()); log(format!("while open 11s: history {} -> {}", before, m(self))); click(self, &Command::Go(Route::Detail(Resource::Memory))); click(self, &Command::Open(Tool::ActivityMonitor)); log(format!("tool feedback: {:?}", self.ivars().monitor.borrow().tool_feedback())); capture(self, "14-memory-tool-opened"); next(1.0) }
+                13 => { key_escape(self); key_escape(self); log(format!("after Escape x2 (should close): {}", state(self))); MARK.with(|x| x.set(m(self))); next(11.0) }
+                14 => { let before = MARK.with(|x| x.get()); log(format!("while closed 11s (shown={})", self.shown())); log(format!("while closed 11s: history {} -> {}; {}", before, m(self), state(self))); self.toggle_popover(); log(format!("reopened: {}", state(self))); capture(self, "15-reopened"); next(0.5) }
+                15 => {
+                    let t = now_unix();
+                    fixture(self, "critical-memory", |m, now| { m.record(Ok(snap(now - 60, Pressure::Warning, 24.6, 30.0, 200)), now - 60); m.record(Ok(snap(now - 30, Pressure::Warning, 24.6, 30.0, 200)), now - 30); m.record(Ok(snap(now, Pressure::Warning, 24.6, 30.0, 200)), now); }, Route::Home);
+                    fixture(self, "handling-memory", |m, now| { m.record(Ok(snap(now - 60, Pressure::Warning, 24.6, 30.0, 200)), now - 60); m.record(Ok(snap(now - 30, Pressure::Warning, 24.6, 30.0, 200)), now - 30); m.note_open(Tool::ActivityMonitor, Err("未找到活动监视器（com.apple.ActivityMonitor）".into()), now); }, Route::Handling(crate::monitor::Group::Memory));
+                    fixture(self, "multiple", |m, now| { for d in [60, 30, 0] { m.record(Ok(snap(now - d, Pressure::Warning, 2.0, 96.0, 30)), now - d); } }, Route::Home);
+                    fixture(self, "issues-list", |m, now| { for d in [60, 30, 0] { m.record(Ok(snap(now - d, Pressure::Warning, 2.0, 96.0, 30)), now - d); } }, Route::Issues);
+                    fixture(self, "recovering", |m, now| { m.record(Ok(snap(now - 30, Pressure::Critical, 0.0, 20.0, 200)), now - 30); m.record(Ok(snap(now, Pressure::Normal, 0.0, 20.0, 200)), now); }, Route::Home);
+                    fixture(self, "failed", |m, now| { m.record(Ok(snap(now - 60, Pressure::Critical, 0.0, 20.0, 200)), now - 60); m.record(Err("无法读取物理内存总量；本次采集无效。".into()), now - 30); m.record(Err("无法读取物理内存总量；本次采集无效。".into()), now); }, Route::Home);
+                    fixture(self, "partial", |m, now| { let mut s = snap(now, Pressure::Unknown, 0.0, 20.0, 200); s.sources.push(SourceStatus { source: "kern.memorystatus_vm_pressure_level", ok: false, elapsed_micros: 3, error: Some("Operation not permitted".into()) }); m.record(Ok(s), now); }, Route::Home);
+                    fixture(self, "stale", |m, now| { m.record(Ok(snap(now - 400, Pressure::Normal, 0.0, 20.0, 200)), now - 400); }, Route::Home);
+                    let _ = t;
+                    log("fixture gallery rendered (fixture data, not live readings)".into());
+                    next(0.5)
+                }
+                _ => { log("quit via More menu item".into()); menu(self, MENU_QUIT); }
+            }
+        }
+    }
+}

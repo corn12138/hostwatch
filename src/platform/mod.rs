@@ -5,6 +5,9 @@ mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(target_os = "macos")]
+pub use macos::scan_processes;
+
 pub trait Collector {
     fn collect(&mut self, processes: bool) -> Result<Snapshot, String>;
 }

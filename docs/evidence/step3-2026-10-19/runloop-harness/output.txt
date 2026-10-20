@@ -1,0 +1,4 @@
+event-tracking mode 2.1s, 0.2s interval: default-mode timer fired 0, common-modes timer fired 10
+ActivityMonitor URL: Some("/System/Applications/Utilities/Activity Monitor.app")
+bogus bundle id -> false (menu shows 未找到… error)
+storage URL parsed: true

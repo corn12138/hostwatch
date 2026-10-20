@@ -1,0 +1,62 @@
+//! Temporary harness: run-loop modes for NSTimer, and NSWorkspace tool lookups.
+use std::cell::Cell;
+use objc2::rc::{autoreleasepool, Retained};
+use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
+use objc2_app_kit::{NSApplication, NSEventTrackingRunLoopMode, NSWorkspace};
+use objc2_foundation::{ns_string, MainThreadMarker, NSDate, NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes, NSTimer, NSURL};
+
+struct Ivars { fired: Cell<u32> }
+define_class!(
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[name = "HarnessTarget"]
+    #[ivars = Ivars]
+    struct Target;
+    impl Target {
+        #[unsafe(method(tick:))]
+        fn tick(&self, _t: &NSTimer) { self.ivars().fired.set(self.ivars().fired.get() + 1); }
+    }
+    unsafe impl NSObjectProtocol for Target {}
+);
+impl Target {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Ivars { fired: Cell::new(0) });
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+fn run_tracking(seconds: f64) {
+    let rl = NSRunLoop::mainRunLoop();
+    let end = NSDate::dateWithTimeIntervalSinceNow(seconds);
+    while NSDate::now().timeIntervalSinceDate(&end) < 0.0 {
+        autoreleasepool(|_| unsafe { rl.runMode_beforeDate(NSEventTrackingRunLoopMode, &end); });
+    }
+}
+
+fn main() {
+    let mtm = MainThreadMarker::new().unwrap();
+    let _app = NSApplication::sharedApplication(mtm);
+    // Old scheduling: scheduledTimer… registers in the default mode only.
+    let old = Target::new(mtm);
+    let t1 = unsafe { NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(0.2, &old, sel!(tick:), None, true) };
+    // New scheduling: same timer kind, added to the common modes.
+    let new = Target::new(mtm);
+    let t2 = unsafe { NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(0.2, &new, sel!(tick:), None, true) };
+    unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&t2, NSRunLoopCommonModes) };
+    run_tracking(2.1);
+    println!("event-tracking mode 2.1s, 0.2s interval: default-mode timer fired {}, common-modes timer fired {}", old.ivars().fired.get(), new.ivars().fired.get());
+    t1.invalidate(); t2.invalidate();
+
+    let ws = NSWorkspace::sharedWorkspace();
+    let am = ws.URLForApplicationWithBundleIdentifier(ns_string!("com.apple.ActivityMonitor"));
+    println!("ActivityMonitor URL: {:?}", am.as_ref().and_then(|u| u.path()).map(|p| p.to_string()));
+    let bogus = ws.URLForApplicationWithBundleIdentifier(ns_string!("invalid.hostwatch.nonexistent"));
+    println!("bogus bundle id -> {:?} (menu shows 未找到… error)", bogus.is_some());
+    let storage = NSURL::URLWithString(ns_string!("x-apple.systempreferences:com.apple.settings.Storage"));
+    println!("storage URL parsed: {}", storage.is_some());
+    let open = std::env::args().any(|a| a == "--open");
+    if open {
+        println!("openURL(ActivityMonitor) = {}", ws.openURL(&am.unwrap()));
+        println!("openURL(Storage) = {}", ws.openURL(&storage.unwrap()));
+    }
+}

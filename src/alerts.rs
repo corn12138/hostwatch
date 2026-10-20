@@ -37,6 +37,20 @@ struct RuleState {
     /// Highest severity announced during the current activation.
     announced: Option<Severity>,
     last_raised: Option<(u64, Severity)>,
+    /// First abnormal sample of the streak that led to (or is building toward) activation.
+    episode_start: Option<u64>,
+    /// Most recent abnormal observation while abnormal or active: (time, severity, evidence).
+    last_abnormal: Option<(u64, Severity, String)>,
+}
+
+/// Read-only view of one rule's sustained state, for presentation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RuleStatus {
+    pub active: Option<Severity>,
+    pub abnormal_streak: u32,
+    pub clear_streak: u32,
+    pub episode_start: Option<u64>,
+    pub last_abnormal: Option<(u64, Severity, String)>,
 }
 
 /// Turns per-sample findings into raise / escalate / recover transitions.
@@ -60,6 +74,20 @@ impl Engine {
             .collect()
     }
 
+    pub fn policy(&self) -> Policy {
+        self.policy
+    }
+
+    pub fn status(&self, id: &str) -> Option<RuleStatus> {
+        self.rules.get(id).map(|state| RuleStatus {
+            active: state.active,
+            abnormal_streak: state.abnormal_streak,
+            clear_streak: state.clear_streak,
+            episode_start: state.episode_start,
+            last_abnormal: state.last_abnormal.clone(),
+        })
+    }
+
     fn observe_one(&mut self, now: u64, finding: &Finding) -> Option<Event> {
         let policy = self.policy;
         let state = self.rules.entry(finding.id).or_default();
@@ -77,11 +105,17 @@ impl Engine {
             Observation::Clear => {
                 state.abnormal_streak = 0;
                 state.clear_streak += 1;
-                let severity = state.active?;
+                let Some(severity) = state.active else {
+                    state.episode_start = None;
+                    state.last_abnormal = None;
+                    return None;
+                };
                 if state.clear_streak < policy.recovery_samples {
                     return None;
                 }
                 state.active = None;
+                state.episode_start = None;
+                state.last_abnormal = None;
                 state.announced?;
                 state.announced = None;
                 Some(event(
@@ -94,7 +128,11 @@ impl Engine {
             Observation::Abnormal(severity, evidence) => {
                 let severity = *severity;
                 state.clear_streak = 0;
+                if state.abnormal_streak == 0 && state.active.is_none() {
+                    state.episode_start = Some(now);
+                }
                 state.abnormal_streak += 1;
+                state.last_abnormal = Some((now, severity, evidence.clone()));
                 let required = if severity >= Severity::Critical {
                     policy.critical_samples
                 } else {
@@ -194,6 +232,11 @@ impl History {
 
     pub fn len(&self) -> usize {
         self.samples.len()
+    }
+
+    /// Retained samples, oldest first, each with its own timestamp.
+    pub fn samples(&self) -> impl DoubleEndedIterator<Item = &Sample> + ExactSizeIterator + '_ {
+        self.samples.iter()
     }
 
     pub fn trend(&self) -> Trend {
@@ -342,6 +385,36 @@ mod tests {
             &[(0, crit()), (30, Observation::Clear), (60, crit())],
         );
         assert_eq!(events, [(0, EventKind::Raised, Severity::Critical)]);
+    }
+
+    #[test]
+    fn status_tracks_episode_evidence_and_recovery_progress() {
+        let mut engine = Engine::new(Policy::default());
+        run(&mut engine, &[(0, Observation::Clear), (10, warn())]);
+        let pending = engine.status("rule").unwrap();
+        assert_eq!((pending.active, pending.episode_start), (None, Some(10)));
+        run(&mut engine, &[(20, warn()), (30, crit())]);
+        let active = engine.status("rule").unwrap();
+        assert_eq!(active.active, Some(Severity::Critical));
+        assert_eq!(active.episode_start, Some(10));
+        assert_eq!(
+            active.last_abnormal,
+            Some((30, Severity::Critical, "c".into()))
+        );
+        // Unknown neither advances recovery nor drops the triggering evidence.
+        run(
+            &mut engine,
+            &[(40, Observation::Clear), (50, Observation::Unknown)],
+        );
+        let recovering = engine.status("rule").unwrap();
+        assert_eq!(recovering.clear_streak, 1);
+        assert_eq!(recovering.active, Some(Severity::Critical));
+        assert_eq!(recovering.last_abnormal.unwrap().0, 30);
+        run(&mut engine, &[(60, Observation::Clear)]);
+        let recovered = engine.status("rule").unwrap();
+        assert_eq!(recovered.active, None);
+        assert_eq!(recovered.last_abnormal, None);
+        assert_eq!(recovered.episode_start, None);
     }
 
     #[test]

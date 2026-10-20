@@ -1,0 +1,10 @@
+[package]
+name = "runloop-harness"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSObject", "NSString", "NSTimer", "NSDate", "NSRunLoop", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWorkspace", "NSRunningApplication", "objc2-core-foundation"] }

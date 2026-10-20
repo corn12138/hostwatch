@@ -76,6 +76,16 @@ pub struct Process {
     pub resident_bytes: u64,
 }
 
+/// Result of one on-demand process-memory ranking pass.
+#[derive(Debug)]
+pub struct ProcessScan {
+    pub top: Vec<Process>,
+    /// Processes the kernel listed.
+    pub listed: usize,
+    /// Listed processes whose resident size could not be read (reported as 0).
+    pub unreadable: usize,
+}
+
 /// Outcome of one data source in one sample, so consumers can tell missing from healthy.
 #[derive(Debug, Serialize)]
 pub struct SourceStatus {

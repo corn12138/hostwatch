@@ -2,7 +2,13 @@ mod activity;
 mod advice;
 mod alerts;
 mod cli;
+#[cfg(target_os = "macos")]
+mod menubar;
 mod model;
+#[cfg(any(target_os = "macos", test))]
+mod monitor;
+#[cfg(any(target_os = "macos", test))]
+mod panel;
 mod platform;
 
 use std::{
@@ -32,7 +38,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(io::stdout(), "{}", cli::HELP)?;
         return Ok(());
     }
-    let options = cli::parse(&args)?;
+    let mut options = cli::parse(&args)?;
+    // Double-clicking Hostwatch.app passes no arguments; the bundle is the menu-bar app.
+    if args.is_empty()
+        && std::env::current_exe().is_ok_and(|exe| cli::inside_app_bundle(&exe.to_string_lossy()))
+    {
+        options.menubar = true;
+    }
+    if options.menubar {
+        #[cfg(target_os = "macos")]
+        return Ok(menubar::run(options.interval)?);
+        #[cfg(not(target_os = "macos"))]
+        return Err("菜单栏仅支持 macOS；Windows 托盘尚未实现。".into());
+    }
     let mut collector = platform::collector()?;
     if !options.watch {
         // Rates and CPU need two counter samples; a short baseline keeps snapshot self-contained.

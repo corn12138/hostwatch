@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/main.rs (/Users/huangyuming/Library/Caches/hostwatch/build-6354191/debug/deps/hostwatch-efe14ca8d203296e)
+
+running 1 test
+test menu::tests::cpu_rate_missing_after_recovery_or_zero_delta_is_not_normal ... FAILED
+
+failures:
+
+---- menu::tests::cpu_rate_missing_after_recovery_or_zero_delta_is_not_normal stdout ----
+thread 'menu::tests::cpu_rate_missing_after_recovery_or_zero_delta_is_not_normal' panicked at src/menu.rs:782:13:
+assertion `left != right` failed: CPU rate is unavailable; headline=("HW ✓", "未见持续异常")
+  left: Normal
+ right: Normal
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    menu::tests::cpu_rate_missing_after_recovery_or_zero_delta_is_not_normal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--bin hostwatch`

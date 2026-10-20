@@ -9,7 +9,7 @@ use sysinfo::{ProcessRefreshKind, System};
 use super::Collector;
 use crate::activity::{self, Counters, Stamp};
 use crate::model::{
-    Disk, Memory, MemoryBreakdown, Pressure, Process, Snapshot, SourceStatus, Swap,
+    Disk, Memory, MemoryBreakdown, Pressure, Process, ProcessScan, Snapshot, SourceStatus, Swap,
 };
 
 // libc deprecates its Mach port bindings; declare the few stable libSystem symbols directly.
@@ -114,26 +114,7 @@ impl Collector for MacCollector {
 
         let mut top_processes = Vec::new();
         if processes {
-            // Full refresh also reads command lines and other unnecessary process metadata.
-            self.system
-                .refresh_processes_specifics(ProcessRefreshKind::new().with_memory());
-            top_processes = self
-                .system
-                .processes()
-                .iter()
-                .filter(|(_, process)| process.memory() > 0)
-                .map(|(pid, process)| Process {
-                    pid: pid.as_u32(),
-                    name: process.name().to_owned(),
-                    resident_bytes: process.memory(),
-                })
-                .collect();
-            top_processes.sort_unstable_by(|a, b| {
-                b.resident_bytes
-                    .cmp(&a.resident_bytes)
-                    .then(a.pid.cmp(&b.pid))
-            });
-            top_processes.truncate(5);
+            top_processes = rank_processes(&mut self.system).top;
             limitations.push("进程仅列出可读取的 RSS 前五名；RSS 不等于活动监视器的内存足迹，不能直接求和或据此判定泄漏。".into());
         }
         limitations.push("磁盘 I/O 吞吐与延迟尚未采集；容量充足不代表磁盘不繁忙。".into());
@@ -162,6 +143,43 @@ impl Collector for MacCollector {
             limitations,
         })
     }
+}
+
+fn rank_processes(system: &mut System) -> ProcessScan {
+    // Full refresh also reads command lines and other unnecessary process metadata.
+    system.refresh_processes_specifics(ProcessRefreshKind::new().with_memory());
+    let listed = system.processes().len();
+    let mut top: Vec<Process> = system
+        .processes()
+        .iter()
+        .filter(|(_, process)| process.memory() > 0)
+        .map(|(pid, process)| Process {
+            pid: pid.as_u32(),
+            name: process.name().to_owned(),
+            resident_bytes: process.memory(),
+        })
+        .collect();
+    let unreadable = listed - top.len();
+    top.sort_unstable_by(|a, b| {
+        b.resident_bytes
+            .cmp(&a.resident_bytes)
+            .then(a.pid.cmp(&b.pid))
+    });
+    top.truncate(5);
+    ProcessScan {
+        top,
+        listed,
+        unreadable,
+    }
+}
+
+/// One-off ranking with its own process table, safe to run off the main thread.
+pub fn scan_processes() -> Result<ProcessScan, String> {
+    let scan = rank_processes(&mut System::new());
+    if scan.listed == 0 {
+        return Err("系统没有返回任何进程信息".into());
+    }
+    Ok(scan)
 }
 
 fn sysctl_raw<T: Copy>(name: &str, value: &mut T) -> Result<(), String> {
@@ -338,6 +356,19 @@ mod tests {
         assert_eq!(decode_pressure(1).unwrap(), Pressure::Normal);
         assert_eq!(decode_pressure(2).unwrap(), Pressure::Warning);
         assert_eq!(decode_pressure(4).unwrap(), Pressure::Critical);
+    }
+
+    #[test]
+    fn process_scan_ranks_readable_processes() {
+        let scan = scan_processes().unwrap();
+        assert!(!scan.top.is_empty() && scan.top.len() <= 5);
+        assert!(scan.top.len() + scan.unreadable <= scan.listed);
+        assert!(scan
+            .top
+            .windows(2)
+            .all(|w| w[0].resident_bytes >= w[1].resident_bytes));
+        let own = std::process::id();
+        assert!(scan.listed > 1, "only saw pid {own}");
     }
 
     #[test]

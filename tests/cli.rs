@@ -78,3 +78,10 @@ fn windows_returns_an_explicit_unsupported_error() {
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("Windows 适配尚未实现"));
 }
+
+#[test]
+fn menubar_rejects_cli_only_options_before_starting_ui() {
+    let output = command().args(["menubar", "--json"]).output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--json"));
+}

@@ -1,0 +1,80 @@
+[23:22:57] launch: health=Warmup routes=[Home] paused=false interval=5 timer=5s history=1 latest=Warmup cpu=None shown=false conclusion="正在准备"
+[23:22:57] opened: health=Warmup routes=[Home] paused=false interval=5 timer=5s history=1 latest=Warmup cpu=None shown=true conclusion="正在准备"
+[23:22:58] captured 01-home-light
+[23:22:58] captured 02-home-dark
+[23:22:58] click Go(Detail(Memory)) title="" enabled=true hit_test_topmost=true
+[23:22:58] perform: Go(Detail(Memory)) current_event=Some("NSEventType(13)")
+[23:22:59] after click memory: health=Warmup routes=[Home, Detail(Memory)] paused=false interval=5 timer=5s history=1 latest=Warmup cpu=None shown=true conclusion="正在准备"
+[23:22:59] captured 03-memory
+[23:22:59] send Escape keyDown; first responder is root: true
+[23:22:59] cancelOperation current_event=Some("NSEventType(13)")
+[23:22:59] after Escape: health=Warmup routes=[Home] paused=false interval=5 timer=5s history=1 latest=Warmup cpu=None shown=true conclusion="正在准备"
+[23:22:59] click Go(Detail(Cpu)) title="" enabled=true hit_test_topmost=true
+[23:22:59] perform: Go(Detail(Cpu)) current_event=Some("NSEventType(13)")
+[23:23:00] captured 04-cpu
+[23:23:00] click Back title="‹ 概览" enabled=true hit_test_topmost=true
+[23:23:00] perform: Back current_event=Some("NSEventType(13)")
+[23:23:00] after Back: health=Warmup routes=[Home] paused=false interval=5 timer=5s history=1 latest=Warmup cpu=None shown=true conclusion="正在准备"
+[23:23:00] click Go(Detail(Disk)) title="" enabled=true hit_test_topmost=true
+[23:23:00] perform: Go(Detail(Disk)) current_event=Some("NSEventType(13)")
+[23:23:00] captured 05-disk
+[23:23:00] send Escape keyDown; first responder is root: true
+[23:23:00] cancelOperation current_event=Some("NSEventType(13)")
+[23:23:00] after Escape: health=Warmup routes=[Home] paused=false interval=5 timer=5s history=1 latest=Warmup cpu=None shown=true conclusion="正在准备"
+[23:23:01] menu processes: health=Warmup routes=[Home, Processes] paused=false interval=5 timer=5s history=1 latest=Warmup cpu=None shown=true conclusion="正在准备"
+[23:23:01] captured 06-processes-unread
+[23:23:01] click RefreshProcesses title="读取" enabled=true hit_test_topmost=true
+[23:23:01] perform: RefreshProcesses current_event=Some("NSEventType(13)")
+[23:23:01] captured 07-processes-loading
+[23:23:04] scan result: ok top=5 listed=1226 unreadable=397 names=[redacted: 5 local process names]
+[23:23:04] captured 08-processes-done
+[23:23:04] captured 09-settings
+[23:23:04] click SetInterval(10) title="10 秒" enabled=true hit_test_topmost=true
+[23:23:04] perform: SetInterval(10) current_event=Some("NSEventType(13)")
+[23:23:05] after 10s: health=Normal routes=[Home, Processes, Settings] paused=false interval=10 timer=10s history=2 latest=Ready cpu=Some(37.5) shown=true conclusion="目前无需处理"
+[23:23:05] click TogglePause title="暂停采集" enabled=true hit_test_topmost=true
+[23:23:05] perform: TogglePause current_event=Some("NSEventType(13)")
+[23:23:05] paused: health=Paused routes=[Home, Processes, Settings] paused=true interval=10 timer=none history=2 latest=Ready cpu=Some(37.5) shown=true conclusion="已暂停采集"
+[23:23:05] click SetInterval(5) title="5 秒" enabled=true hit_test_topmost=true
+[23:23:05] perform: SetInterval(5) current_event=Some("NSEventType(13)")
+[23:23:05] interval while paused: health=Paused routes=[Home, Processes, Settings] paused=true interval=5 timer=none history=2 latest=Ready cpu=Some(37.5) shown=true conclusion="已暂停采集"
+[23:23:05] captured 10-settings-paused
+[23:23:17] after 12s paused: history 2 -> 2 ; health=Paused routes=[Home, Processes, Settings] paused=true interval=5 timer=none history=2 latest=Ready cpu=Some(37.5) shown=true conclusion="已暂停采集"
+[23:23:17] click Back title="‹ 进程排行" enabled=true hit_test_topmost=true
+[23:23:17] perform: Back current_event=Some("NSEventType(13)")
+[23:23:17] click Back title="‹ 概览" enabled=true hit_test_topmost=true
+[23:23:17] perform: Back current_event=Some("NSEventType(13)")
+[23:23:17] after Back x2: health=Paused routes=[Home] paused=true interval=5 timer=none history=2 latest=Ready cpu=Some(37.5) shown=true conclusion="已暂停采集"
+[23:23:18] captured 11-home-paused
+[23:23:18] click TogglePause title="继续采集" enabled=true hit_test_topmost=true
+[23:23:18] perform: TogglePause current_event=Some("NSEventType(13)")
+[23:23:18] resumed: health=Warmup routes=[Home] paused=false interval=5 timer=5s history=3 latest=Warmup cpu=None shown=true conclusion="正在准备"
+[23:23:18] captured 12-home-resumed-warmup
+[23:23:23] 5.6s after resume: health=Normal routes=[Home] paused=false interval=5 timer=5s history=4 latest=Ready cpu=Some(37.5) shown=true conclusion="目前无需处理"
+[23:23:23] captured 13-home-after-baseline
+[23:23:34] while open 11s: history 4 -> 6
+[23:23:34] click Go(Detail(Memory)) title="" enabled=true hit_test_topmost=true
+[23:23:34] perform: Go(Detail(Memory)) current_event=Some("NSEventType(13)")
+[23:23:34] click Open(ActivityMonitor) title="打开活动监视器" enabled=true hit_test_topmost=true
+[23:23:34] perform: Open(ActivityMonitor) current_event=Some("NSEventType(13)")
+[23:23:35] tool feedback: Some(ToolFeedback { tool: ActivityMonitor, at: 1792466614, result: Ok(()) })
+[23:23:35] captured 14-memory-tool-opened
+[23:23:36] send Escape keyDown; first responder is root: true
+[23:23:36] send Escape keyDown; first responder is root: true
+[23:23:36] after Escape x2 (should close): health=Normal routes=[Home, Detail(Memory)] paused=false interval=5 timer=5s history=6 latest=Ready cpu=Some(37.5) shown=false conclusion="目前无需处理"
+[23:23:47] while closed 11s (shown=false)
+[23:23:47] while closed 11s: history 6 -> 8; health=Normal routes=[Home, Detail(Memory)] paused=false interval=5 timer=5s history=8 latest=Ready cpu=Some(37.5) shown=false conclusion="目前无需处理"
+[23:23:47] reopened: health=Normal routes=[Home] paused=false interval=5 timer=5s history=8 latest=Ready cpu=Some(37.5) shown=true conclusion="目前无需处理"
+[23:23:47] captured 15-reopened
+[23:23:48] captured fixture-critical-memory
+[23:23:48] captured fixture-handling-memory
+[23:23:48] captured fixture-multiple
+[23:23:48] captured fixture-issues-list
+[23:23:49] captured fixture-recovering
+[23:23:49] captured fixture-failed
+[23:23:49] captured fixture-partial
+[23:23:49] captured fixture-stale
+[23:23:49] fixture gallery rendered (fixture data, not live readings)
+[23:23:49] quit via More menu item
+exit=0
+no leftover process
