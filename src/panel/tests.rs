@@ -587,3 +587,29 @@ fn optimize_page_from_analysis_to_checked_outcomes() {
         "不会自动删除任何文件"
     ));
 }
+
+#[test]
+fn temperature_without_sensors_falls_back_to_the_system_level() {
+    // Machines without readable sensors (e.g. Intel Macs) still report macOS's thermal level.
+    let mut monitor = Monitor::new(30);
+    let mut s = normal(0);
+    let thermal = s.thermal.as_mut().unwrap();
+    thermal.cpu_celsius = None;
+    thermal.cpu_max_celsius = None;
+    thermal.state = Some(ThermalState::Fair);
+    monitor.record(Ok(s), 0);
+    assert_eq!(
+        resource(&home(&monitor, 0), Resource::Thermal),
+        ("偏热", "偏热", Tone::Neutral, false)
+    );
+    let detail = page_for(&monitor, Route::Detail(Resource::Thermal));
+    assert!(has(&detail, "偏热 系统散热等级"));
+    assert!(has(&detail, "芯片最高：未知"));
+    assert!(
+        !detail
+            .blocks
+            .iter()
+            .any(|b| matches!(b, Block::Graphic(Graphic::Chart(_)))),
+        "no empty temperature chart without sensors"
+    );
+}
