@@ -33,7 +33,16 @@
 
 ### 安装 Hostwatch.app
 
-从 [Releases](https://github.com/corn12138/hostwatch/releases) 下载 `Hostwatch-<版本>-macos-arm64.zip`（Apple 芯片，macOS 13 及以上），解压后把 `Hostwatch.app` 拖到「应用程序」并打开。应用只做了临时（ad-hoc）签名、未经公证，首次打开会被系统拦截：到「系统设置 › 隐私与安全性」点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/Hostwatch.app`。不会开机自启；需要时手动打开。本地自行打包：`./scripts/package-app.sh`（输出到 `dist/`）。
+从 [Releases](https://github.com/corn12138/hostwatch/releases) 下载 `Hostwatch-<版本>-macos-arm64.zip`（Apple 芯片，macOS 13 及以上），解压后把 `Hostwatch.app` 拖到「应用程序」并打开。应用只做了临时（ad-hoc）签名、未经公证，首次打开会被系统拦截：到「系统设置 › 隐私与安全性」点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/Hostwatch.app`。不会开机自启；需要时手动打开。
+
+### 本地更新与发布
+
+```sh
+./scripts/install.sh          # 构建 → 替换 /Applications/Hostwatch.app → 重新打开（本机构建无需 Gatekeeper 确认）
+./scripts/release.sh 0.1.1    # 改版本号 → 检查 → 提交并推送 v0.1.1 标签 → GitHub Actions 自动打包并发布
+```
+
+`./scripts/package-app.sh` 只打包到 `dist/`。GitHub Actions：每次推送 `main` / PR 运行格式、clippy、测试和打包（`.github/workflows/ci.yml`）；推送 `v*` 标签时校验版本号并把 zip 附到 Release（`release.yml`）。应用本身不联网，不会自动检查更新。
 
 `Ctrl+C` 停止。采样间隔为 5–3600 秒；进程排行默认关闭以降低采集成本。`snapshot` 会先取一个基线样本、等待 1 秒再输出，以便给出 CPU 与交换速率。终端运行期间才会监测，退出后不会继续后台执行。
 
@@ -67,7 +76,22 @@
 ./scripts/cargo.sh build --locked --release
 ```
 
-结构：`src/platform/` 负责采集与平台隔离，`src/model.rs` 定义数据，`src/activity.rs` 做计数器差分与睡眠/重置判定，`src/advice.rs` 是单样本规则，`src/alerts.rs` 是持续告警状态机与有界历史，`src/cli.rs` / `src/main.rs` 负责命令行与输出，`src/monitor.rs` 是与平台无关的面板状态（样本、问题分组、缺口证据、按需进程、工具反馈），`src/panel.rs` 把状态变成页面与图表数据（各状态可离线测试），`src/menubar.rs` 是 AppKit 外壳（状态栏项、弹出面板、原生绘图）。除采集外均可用固定样本离线测试。
+结构（每个文件只做一件事，均在约 400 行以内，测试单独成文件）：
+
+```text
+src/platform/      采集与平台隔离（macOS 实现，Windows 占位）
+src/model.rs       数据模型（CLI JSON schema）
+src/activity.rs    计数器差分、睡眠 / 重置判定
+src/advice.rs      单样本规则
+src/alerts.rs      持续告警状态机（Engine）与 120 样本历史
+src/cli.rs main.rs 命令行与终端输出
+src/monitor/       面板状态：mod（样本、暂停、间隔、过时、按需进程、工具反馈）、issues（问题分组与引擎恢复进度）
+src/panel/         页面数据（与平台无关、可离线测试）：mod（类型与路由）、format、reading、chart、summary、pages/（每页一个文件）
+src/menubar/       AppKit 外壳：controller（生命周期、定时器、弹出面板）、commands（各控件动作）、render（页面 → 视图树）、
+                   kit / blocks / rows（可复用的小型原生视图套件）、views（自定义 NSView）、draw（原生绘图）
+```
+
+新增页面：在 `panel/pages/` 加一个文件生成 `Block`；只有新的 `Block` 种类才需要在 `menubar/blocks.rs` 加布局。
 
 - [技术选型](docs/architecture.md)：Rust / Go 比较、数据口径、资源预算。
 - [阶段状态与下一阶段任务](docs/roadmap.md)：菜单栏、通知、诊断深度和 Windows 槽位。

@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.79.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/cargo.sh fmt -- --check
+      - run: ./scripts/cargo.sh clippy --locked --all-targets -- -D warnings
+      - run: ./scripts/cargo.sh test --locked
+      - run: ./scripts/package-app.sh

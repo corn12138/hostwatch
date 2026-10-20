@@ -26,7 +26,7 @@
 ## 实现分层
 
 ```text
-CLI / 菜单栏（monitor.rs 状态 → panel.rs 页面与图表数据 → menubar.rs AppKit NSStatusItem + NSPopover）
+CLI / 菜单栏（monitor/ 状态 → panel/ 页面与图表数据 → menubar/ AppKit NSStatusItem + NSPopover，经 Kit 视图套件渲染）
   → Collector 平台接口
       → macOS：hw.memsize、host_statistics64（内存分项与交换/页面计数）、
                host_cpu_load_info、vm.swapusage、sysctl 压力、statfs 磁盘；
@@ -42,7 +42,7 @@ CLI / 菜单栏（monitor.rs 状态 → panel.rs 页面与图表数据 → menub
 
 共享模型不泄露平台句柄。建议规则不访问文件系统、不执行操作，因此可使用固定样本回归验证。未来 Windows 必须映射自身可用指标；不能把「可用内存比例」直接伪装成 macOS 内核压力。
 
-当前采用单线程同步采样，不引入异步运行时、数据库、网络服务或 WebView。菜单栏面板：主线程 `NSTimer`（注册在 common run-loop modes，面板或「更多」菜单打开期间也触发）驱动采样（单次采集约百微秒），状态栏图标只在结论变化时更新；面板视图只在显示时按当前状态重建（新样本、导航、命令），关闭后丢弃视图、只停绘制不停采样。页面由 `panel::page` 生成：数值、图表点、无障碍摘要来自同一份样本，图表横轴用每个样本自己的时间戳，缺口只用记录到的证据（暂停 / 采集失败 / 睡眠）标注，否则标「无数据」。恢复进度直接读取 `alerts::Engine` 的只读规则状态（`Engine::status`），按钮点击不参与。按需进程排行在一个短命工作线程中用独立的 `sysinfo::System` 扫描，主线程以 0.1 秒定时器取结果并 join，不会重叠，退出时也会等待它结束。系统工具只经 `NSWorkspace` 打开活动监视器或储存空间设置，不终止进程、不删除文件、不提权。绑定用 `objc2` 0.6 / `objc2-app-kit` 0.3（只开启所需 feature，已在 Rust 1.79 构建），不使用 Tauri / WebView。RAM / swap / CPU 走原生接口，每个采集器只持有一个 Mach host 端口；`sysinfo::System` 只在开启进程排行时刷新。`sysinfo` 固定为适配本机 Rust 1.79 的 0.30.13；后续升级需同时验证指标语义与 MSRV，不能只更新版本号。
+当前采用单线程同步采样，不引入异步运行时、数据库、网络服务或 WebView。菜单栏面板：主线程 `NSTimer`（注册在 common run-loop modes，面板或「更多」菜单打开期间也触发）驱动采样（单次采集约百微秒），状态栏图标只在结论变化时更新；面板视图只在显示时按当前状态重建（新样本、导航、命令），关闭后丢弃视图、只停绘制不停采样。页面由 `panel::page` 生成：数值、图表点、无障碍摘要来自同一份样本，图表横轴用每个样本自己的时间戳，缺口只用记录到的证据（暂停 / 采集失败 / 睡眠）标注，否则标「无数据」。恢复进度直接读取 `alerts::Engine` 的只读规则状态（`Engine::status`），按钮点击不参与。按需进程排行在一个短命工作线程中用独立的 `sysinfo::System` 扫描，主线程以 0.1 秒定时器取结果并 join，不会重叠，退出时也会等待它结束。系统工具只经 `NSWorkspace` 打开活动监视器或储存空间设置，不终止进程、不删除文件、不提权。绑定用 `objc2` 0.6 / `objc2-app-kit` 0.3（只开启所需 feature，已在 Rust 1.79 构建），不使用 Tauri / WebView。界面框架评估（2026-10-19）：egui / iced / Slint 等自绘 Rust UI 会失去原生弹出面板外观且内存通常更高；SwiftUI + Rust 核心可缩短 UI 代码但引入 Swift 工具链与 FFI。当前选择保留 objc2 + AppKit，以 `menubar/kit.rs` 等模块作为项目内的轻量视图套件：页面只产出平台无关的 `panel::Block`，AppKit 只负责把每种 Block 画出来，将来的 Windows 托盘可复用 `monitor/` 与 `panel/`。RAM / swap / CPU 走原生接口，每个采集器只持有一个 Mach host 端口；`sysinfo::System` 只在开启进程排行时刷新。`sysinfo` 固定为适配本机 Rust 1.79 的 0.30.13；后续升级需同时验证指标语义与 MSRV，不能只更新版本号。
 
 ## 性能预算（目标，不是产品保证）
 
