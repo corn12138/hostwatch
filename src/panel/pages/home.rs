@@ -16,6 +16,7 @@ pub(crate) fn home(view: &View, blocks: &mut Vec<Block>) {
                     Group::Memory => "内存",
                     Group::Cpu => "处理器",
                     Group::Disk => "磁盘空间",
+                    Group::Thermal => "散热",
                 })
                 .collect();
             blocks.push(Block::Card {
@@ -30,7 +31,12 @@ pub(crate) fn home(view: &View, blocks: &mut Vec<Block>) {
             });
         }
     }
-    for resource in [Resource::Memory, Resource::Cpu, Resource::Disk] {
+    for resource in [
+        Resource::Memory,
+        Resource::Cpu,
+        Resource::Disk,
+        Resource::Thermal,
+    ] {
         blocks.push(resource_row(view, resource));
     }
     match view.health {

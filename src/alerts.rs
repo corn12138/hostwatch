@@ -179,6 +179,7 @@ pub struct Sample {
     pub swap_traffic_bytes_per_second: Option<f64>,
     pub cpu_busy_percent: Option<f64>,
     pub disk_available_bytes: Option<u64>,
+    pub cpu_celsius: Option<f64>,
 }
 
 impl Sample {
@@ -192,7 +193,8 @@ impl Sample {
                 .zip(activity.swap_out_bytes_per_second)
                 .map(|(a, b)| a + b),
             cpu_busy_percent: activity.cpu_busy_percent,
-            disk_available_bytes: snapshot.disk.as_ref().map(|d| d.available_bytes),
+            disk_available_bytes: snapshot.disk.as_ref().map(|d| d.usable_bytes()),
+            cpu_celsius: snapshot.thermal.as_ref().and_then(|t| t.cpu_celsius),
         }
     }
 }
@@ -427,6 +429,7 @@ mod tests {
                 swap_traffic_bytes_per_second: None,
                 cpu_busy_percent: Some(t as f64),
                 disk_available_bytes: Some(1000 - t),
+                cpu_celsius: None,
             });
         }
         assert_eq!(history.len(), HISTORY_CAPACITY);

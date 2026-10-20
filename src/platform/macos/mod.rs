@@ -1,16 +1,18 @@
+mod disk;
+mod processes;
+mod thermal;
+
 use std::{
     ffi::CString,
     mem,
     time::{Instant, SystemTime},
 };
 
-use sysinfo::{ProcessRefreshKind, System};
-
 use super::Collector;
 use crate::activity::{self, Counters, Stamp};
-use crate::model::{
-    Disk, Memory, MemoryBreakdown, Pressure, Process, ProcessScan, Snapshot, SourceStatus, Swap,
-};
+use crate::model::{Memory, MemoryBreakdown, Pressure, Snapshot, SourceStatus, Swap};
+pub use processes::{process_table, scan_processes, ProcTable, RankBy};
+use thermal::ThermalReader;
 
 // libc deprecates its Mach port bindings; declare the few stable libSystem symbols directly.
 extern "C" {
@@ -24,8 +26,8 @@ extern "C" {
 }
 
 pub struct MacCollector {
-    /// Only used for the optional process ranking; RAM/swap come from native interfaces.
-    system: System,
+    thermal: ThermalReader,
+    purgeable: disk::Purgeable,
     host: libc::mach_port_t,
     started: Instant,
     previous: Option<(Stamp, Counters)>,
@@ -34,7 +36,8 @@ pub struct MacCollector {
 impl MacCollector {
     pub fn new() -> Self {
         Self {
-            system: System::new(),
+            thermal: ThermalReader::new(),
+            purgeable: disk::Purgeable::default(),
             // One send right for the collector's lifetime instead of leaking one per sample.
             host: unsafe { mach_host_self() },
             started: Instant::now(),
@@ -92,7 +95,9 @@ impl Collector for MacCollector {
             memory_pressure,
         )
         .unwrap_or(Pressure::Unknown);
-        let disk = measure(&mut sources, "statfs", startup_disk);
+        let purgeable = &mut self.purgeable;
+        let disk = measure(&mut sources, "statfs", || disk::startup_disk(purgeable));
+        let thermal = self.thermal.read();
 
         let stamp = Stamp {
             monotonic: self.started.elapsed(),
@@ -114,10 +119,13 @@ impl Collector for MacCollector {
 
         let mut top_processes = Vec::new();
         if processes {
-            top_processes = rank_processes(&mut self.system).top;
-            limitations.push("进程仅列出可读取的 RSS 前五名；RSS 不等于活动监视器的内存足迹，不能直接求和或据此判定泄漏。".into());
+            top_processes = scan_processes(RankBy::Resident)?.top;
+            limitations.push("进程仅列出可读取的 RSS 前五名；活动监视器“内存”列是物理内存占用（JSON 中的 footprint_bytes），两者不能直接求和或据此判定泄漏。".into());
         }
         limitations.push("磁盘 I/O 吞吐与延迟尚未采集；容量充足不代表磁盘不繁忙。".into());
+        if !self.thermal.has_sensors() {
+            limitations.push("本机未能读取芯片温度传感器，只提供系统散热等级。".into());
+        }
         for source in sources.iter().filter(|s| !s.ok) {
             limitations.push(format!(
                 "{} 不可用：{}",
@@ -137,49 +145,13 @@ impl Collector for MacCollector {
             },
             activity,
             disk,
+            thermal: Some(thermal),
             processes_requested: processes,
             top_processes,
             sources,
             limitations,
         })
     }
-}
-
-fn rank_processes(system: &mut System) -> ProcessScan {
-    // Full refresh also reads command lines and other unnecessary process metadata.
-    system.refresh_processes_specifics(ProcessRefreshKind::new().with_memory());
-    let listed = system.processes().len();
-    let mut top: Vec<Process> = system
-        .processes()
-        .iter()
-        .filter(|(_, process)| process.memory() > 0)
-        .map(|(pid, process)| Process {
-            pid: pid.as_u32(),
-            name: process.name().to_owned(),
-            resident_bytes: process.memory(),
-        })
-        .collect();
-    let unreadable = listed - top.len();
-    top.sort_unstable_by(|a, b| {
-        b.resident_bytes
-            .cmp(&a.resident_bytes)
-            .then(a.pid.cmp(&b.pid))
-    });
-    top.truncate(5);
-    ProcessScan {
-        top,
-        listed,
-        unreadable,
-    }
-}
-
-/// One-off ranking with its own process table, safe to run off the main thread.
-pub fn scan_processes() -> Result<ProcessScan, String> {
-    let scan = rank_processes(&mut System::new());
-    if scan.listed == 0 {
-        return Err("系统没有返回任何进程信息".into());
-    }
-    Ok(scan)
 }
 
 fn sysctl_raw<T: Copy>(name: &str, value: &mut T) -> Result<(), String> {
@@ -312,39 +284,6 @@ fn memory_pressure() -> Result<Pressure, String> {
     decode_pressure(value)
 }
 
-fn startup_disk() -> Result<Disk, String> {
-    // APFS volumes share capacity. Report the writable Data volume once, without summing volumes.
-    let path = if std::path::Path::new("/System/Volumes/Data").exists() {
-        "/System/Volumes/Data"
-    } else {
-        "/"
-    };
-    let c_path = CString::new(path).unwrap();
-    // Darwin statfs uses 64-bit block counters to preserve large-volume capacity.
-    let mut stats = mem::MaybeUninit::<libc::statfs>::uninit();
-    // statfs initializes the output only on success; c_path is NUL-terminated and remains live.
-    if unsafe { libc::statfs(c_path.as_ptr(), stats.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    let stats = unsafe { stats.assume_init() };
-    let total_bytes = stats
-        .f_blocks
-        .checked_mul(u64::from(stats.f_bsize))
-        .ok_or("磁盘总容量溢出")?;
-    let available_bytes = stats
-        .f_bavail
-        .checked_mul(u64::from(stats.f_bsize))
-        .ok_or("磁盘可用容量溢出")?;
-    if total_bytes == 0 || available_bytes > total_bytes {
-        return Err("磁盘返回无效容量".into());
-    }
-    Ok(Disk {
-        path: path.into(),
-        total_bytes,
-        available_bytes,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,15 +299,28 @@ mod tests {
 
     #[test]
     fn process_scan_ranks_readable_processes() {
-        let scan = scan_processes().unwrap();
+        let scan = scan_processes(RankBy::Footprint).unwrap();
         assert!(!scan.top.is_empty() && scan.top.len() <= 5);
         assert!(scan.top.len() + scan.unreadable <= scan.listed);
+        let footprint = |p: &crate::model::Process| p.footprint_bytes.unwrap();
         assert!(scan
             .top
             .windows(2)
+            .all(|w| footprint(&w[0]) >= footprint(&w[1])));
+        let by_rss = scan_processes(RankBy::Resident).unwrap();
+        assert!(by_rss
+            .top
+            .windows(2)
             .all(|w| w[0].resident_bytes >= w[1].resident_bytes));
+        // Our own process is always readable.
         let own = std::process::id();
-        assert!(scan.listed > 1, "only saw pid {own}");
+        let table = process_table().unwrap();
+        let me = table
+            .readable
+            .iter()
+            .find(|p| p.pid == own)
+            .expect("own pid");
+        assert!(me.footprint > 0 && me.cpu_ns > 0 && !me.name.is_empty());
     }
 
     #[test]
@@ -385,5 +337,23 @@ mod tests {
         assert_eq!(second.activity.status, crate::model::RateStatus::Ready);
         let cpu = second.activity.cpu_busy_percent.expect("CPU ticks");
         assert!((0.0..=100.0).contains(&cpu));
+        // The purgeable query runs in the background; give it time before the third sample.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let third = collector.collect(false).unwrap();
+        assert!(third
+            .disk
+            .as_ref()
+            .unwrap()
+            .important_available_bytes
+            .is_some());
+        let disk = second.disk.as_ref().expect("statfs");
+        assert!(disk.usable_bytes() >= disk.available_bytes);
+        assert!(disk.usable_bytes() <= disk.total_bytes);
+        let thermal = second.thermal.as_ref().expect("thermal");
+        assert!(thermal.state.is_some());
+        if let Some(celsius) = thermal.cpu_celsius {
+            assert!((1.0..=130.0).contains(&celsius));
+            assert!(thermal.cpu_max_celsius.unwrap() >= celsius);
+        }
     }
 }

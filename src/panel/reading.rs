@@ -60,12 +60,25 @@ pub(crate) fn reading(
             disk_total(monitor),
         ) {
             (Some(available), Some(total)) => format!(
-                "启动磁盘可用 {} GiB（{:.1}%）",
-                gib(available),
+                "启动磁盘可用 {}（{:.1}%）",
+                gb(available),
                 available as f64 / total as f64 * 100.0
             ),
             _ => fallback(),
         },
+        "thermal_state" => {
+            let level = if severity >= Severity::Critical {
+                "严重"
+            } else {
+                "偏高"
+            };
+            match sample.and_then(|s| s.cpu_celsius) {
+                Some(celsius) => {
+                    format!("系统散热等级{level}（芯片约 {}）", celsius_label(celsius))
+                }
+                None => format!("系统散热等级{level}"),
+            }
+        }
         _ => fallback(),
     }
 }
@@ -90,6 +103,13 @@ pub(crate) fn issue_title(issue: &Issue) -> &'static str {
                 "磁盘空间不足"
             }
         }
+        Group::Thermal => {
+            if issue.severity >= Severity::Critical {
+                "电脑过热，性能已被大幅限制"
+            } else {
+                "电脑有点热，可能已降速"
+            }
+        }
     }
 }
 
@@ -109,6 +129,9 @@ pub(crate) fn issue_reason(issue: &Issue) -> &'static str {
             "处理器已连续多个样本接近满负荷，风扇可能变响、操作可能变慢。导出视频、编译等任务期间这是正常的。"
         }
         Group::Disk => "启动磁盘可用空间很少，系统更新、保存文件和交换都可能受影响。",
+        Group::Thermal => {
+            "macOS 报告散热压力，正在降低处理器速度来保护硬件，所以电脑会变慢。通常由持续高负载、通风不好或环境太热引起。"
+        }
     }
 }
 
@@ -129,6 +152,11 @@ pub(crate) fn issue_steps(group: Group) -> [&'static str; 3] {
             "把不需要的大文件删除或移到其他磁盘，删除前确认已备份；不要删除系统目录或交换文件。",
             "最后清空废纸篓，空间才会真正释放。",
         ],
+        Group::Thermal => [
+            "让电脑底部和出风口保持通风，不要放在被褥或软垫上。",
+            "退出暂时不用的高负载应用，可以用“一键优化”或活动监视器的“CPU”页。",
+            "如果没有在做重活也一直过热，检查风扇和灰尘，或联系售后。",
+        ],
     }
 }
 
@@ -137,7 +165,10 @@ pub(crate) fn rule_rule(id: &str) -> &'static str {
         "memory_pressure" => "压力偏高连续 2 个样本提示，严重时立即提示",
         "swap_activity" => "≥ 1 MiB/s 连续 2 个样本提示，≥ 16 MiB/s 立即提示为严重",
         "cpu_saturation" => "≥ 90% 连续 2 个样本提示",
-        _ => "可用 < 15% 或 < 20 GiB 提示；< 5% 或 < 5 GiB 为严重",
+        "thermal_state" => {
+            "macOS 散热等级“偏高”连续 2 个样本提示，“严重”立即提示；温度数字本身不触发提示"
+        }
+        _ => "可用 < 15% 或 < 20 GB 提示；< 5% 或 < 5 GB 为严重",
     }
 }
 

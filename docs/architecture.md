@@ -20,7 +20,8 @@
 - [Rust 官方介绍](https://rust-lang.org/)：无垃圾回收器，适合对内存和运行开销敏感的代码。
 - [Go 官方 GC 指南](https://go.dev/doc/gc-guide)：GC 的 CPU / 内存取舍、软内存限制，以及为什么不应用虚拟地址空间评判实际内存占用。
 - [Apple 活动监视器内存说明](https://support.apple.com/guide/activity-monitor/view-memory-usage-actmntr1004/mac)：压力、缓存、压缩和交换空间应综合理解。
-- [sysinfo 0.30.13](https://docs.rs/crate/sysinfo/0.30.13)：按需刷新；关闭默认多线程可避免额外资源成本。
+- libproc（`proc_listallpids`、`proc_pid_rusage`、`proc_pidinfo`）：进程物理内存占用与 CPU 时间，与活动监视器同源；已取代 sysinfo 依赖。
+- [NSProcessInfo.thermalState](https://developer.apple.com/documentation/foundation/processinfo/thermalstate)：公开的散热等级；芯片温度来自 IOHID 温度传感器（非公开接口，运行时解析，缺失时只降级为无温度）。
 - [XNU 内存压力实现](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_memorystatus_notify.c)：内核压力值来源，私有接口需保留降级路径。
 
 ## 实现分层
@@ -29,8 +30,9 @@
 CLI / 菜单栏（monitor/ 状态 → panel/ 页面与图表数据 → menubar/ AppKit NSStatusItem + NSPopover，经 Kit 视图套件渲染）
   → Collector 平台接口
       → macOS：hw.memsize、host_statistics64（内存分项与交换/页面计数）、
-               host_cpu_load_info、vm.swapusage、sysctl 压力、statfs 磁盘；
-               sysinfo 仅用于可选进程排行
+               host_cpu_load_info、vm.swapusage、sysctl 压力、statfs 磁盘
+               （+ 后台每 10 分钟查询一次可清除空间）、散热等级与温度传感器；
+               libproc 用于按需进程排行与一键优化分析
       → Windows：显式 unsupported 占位
   → Activity（双时钟差分；warmup / 计数器重置 / 睡眠跳变不出速率）
   → Snapshot（字节、时间、压力级别、逐源状态、采集限制）
@@ -42,7 +44,7 @@ CLI / 菜单栏（monitor/ 状态 → panel/ 页面与图表数据 → menubar/ 
 
 共享模型不泄露平台句柄。建议规则不访问文件系统、不执行操作，因此可使用固定样本回归验证。未来 Windows 必须映射自身可用指标；不能把「可用内存比例」直接伪装成 macOS 内核压力。
 
-当前采用单线程同步采样，不引入异步运行时、数据库、网络服务或 WebView。菜单栏面板：主线程 `NSTimer`（注册在 common run-loop modes，面板或「更多」菜单打开期间也触发）驱动采样（单次采集约百微秒），状态栏图标只在结论变化时更新；面板视图只在显示时按当前状态重建（新样本、导航、命令），关闭后丢弃视图、只停绘制不停采样。页面由 `panel::page` 生成：数值、图表点、无障碍摘要来自同一份样本，图表横轴用每个样本自己的时间戳，缺口只用记录到的证据（暂停 / 采集失败 / 睡眠）标注，否则标「无数据」。恢复进度直接读取 `alerts::Engine` 的只读规则状态（`Engine::status`），按钮点击不参与。按需进程排行在一个短命工作线程中用独立的 `sysinfo::System` 扫描，主线程以 0.1 秒定时器取结果并 join，不会重叠，退出时也会等待它结束。系统工具只经 `NSWorkspace` 打开活动监视器或储存空间设置，不终止进程、不删除文件、不提权。绑定用 `objc2` 0.6 / `objc2-app-kit` 0.3（只开启所需 feature，已在 Rust 1.79 构建），不使用 Tauri / WebView。界面框架评估（2026-10-19）：egui / iced / Slint 等自绘 Rust UI 会失去原生弹出面板外观且内存通常更高；SwiftUI + Rust 核心可缩短 UI 代码但引入 Swift 工具链与 FFI。当前选择保留 objc2 + AppKit，以 `menubar/kit.rs` 等模块作为项目内的轻量视图套件：页面只产出平台无关的 `panel::Block`，AppKit 只负责把每种 Block 画出来，将来的 Windows 托盘可复用 `monitor/` 与 `panel/`。RAM / swap / CPU 走原生接口，每个采集器只持有一个 Mach host 端口；`sysinfo::System` 只在开启进程排行时刷新。`sysinfo` 固定为适配本机 Rust 1.79 的 0.30.13；后续升级需同时验证指标语义与 MSRV，不能只更新版本号。
+当前采用单线程同步采样，不引入异步运行时、数据库、网络服务或 WebView。菜单栏面板：主线程 `NSTimer`（注册在 common run-loop modes，面板或「更多」菜单打开期间也触发）驱动采样（单次采集约百微秒），状态栏图标只在结论变化时更新；面板视图只在显示时按当前状态重建（新样本、导航、命令），关闭后丢弃视图、只停绘制不停采样。页面由 `panel::page` 生成：数值、图表点、无障碍摘要来自同一份样本，图表横轴用每个样本自己的时间戳，缺口只用记录到的证据（暂停 / 采集失败 / 睡眠）标注，否则标「无数据」。恢复进度直接读取 `alerts::Engine` 的只读规则状态（`Engine::status`），按钮点击不参与。按需进程排行与一键优化分析各在一个短命后台任务（`menubar/jobs.rs`）中用 libproc 扫描，主线程以 0.1 秒定时器取结果并 join，同类任务不重叠，退出时也会等待它们结束。系统工具只经 `NSWorkspace` 打开活动监视器或储存空间设置；一键优化只对你确认的普通应用调用 `NSRunningApplication.terminate`（与 ⌘Q 相同，非强制），之后用 `kill(pid, 0)` 每 5 秒复查、至多 4 次。不删除文件、不提权。可清除空间的查询需要数百毫秒，放在独立后台线程中每 10 分钟一次，不阻塞主线程。绑定用 `objc2` 0.6 / `objc2-app-kit` 0.3（只开启所需 feature，已在 Rust 1.79 构建），不使用 Tauri / WebView。界面框架评估（2026-10-19）：egui / iced / Slint 等自绘 Rust UI 会失去原生弹出面板外观且内存通常更高；SwiftUI + Rust 核心可缩短 UI 代码但引入 Swift 工具链与 FFI。当前选择保留 objc2 + AppKit，以 `menubar/kit.rs` 等模块作为项目内的轻量视图套件：页面只产出平台无关的 `panel::Block`，AppKit 只负责把每种 Block 画出来，将来的 Windows 托盘可复用 `monitor/` 与 `panel/`。RAM / swap / CPU 走原生接口，每个采集器只持有一个 Mach host 端口；温度传感器句柄只在启动时打开一次并复用。
 
 ## 性能预算（目标，不是产品保证）
 
@@ -60,6 +62,6 @@ CLI 原型没有历史缓冲区，数据输出后丢弃；进程排行需要扫�
 1. 每条建议包含证据，避免「清理即可加速」的无依据保证。
 2. 内存压力优先于使用率；swap 变化率、压缩页与持续时长在下一阶段补齐。
 3. APFS 按容器/卷语义呈现，共享容量不得重复相加。
-4. 容量监控与 I/O 繁忙分开。CPU、温度、网络或应用锁死仍可能导致卡顿。
-5. 默认诊断与人工建议。未来清理必须有预览、排除规则与可恢复方案；不直接处理系统缓存、swap 或 Time Machine 快照。
+4. 容量监控与 I/O 繁忙分开。散热以 macOS 自己的等级判断是否降速，温度数字只作参考；网络或应用锁死仍可能导致卡顿。
+5. 默认诊断与人工建议。唯一的主动操作是「一键优化」：列出占用最多的已打开应用供确认，再像 ⌘Q 一样请它们正常退出（可被应用的保存提示取消），不强制结束、不处理系统缓存、swap 或 Time Machine 快照、不删除文件；系统组件与自身受保护。未来文件清理必须有预览、排除规则与可恢复方案。
 6. 菜单栏优先尝试原生轻量外壳；如果评估 Tauri 等方案，必须将 WebView/辅助进程算入总预算。

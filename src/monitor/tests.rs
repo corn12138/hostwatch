@@ -195,6 +195,7 @@ fn process_reads_do_not_overlap_and_keep_previous_result() {
             pid: 1,
             name: "a".into(),
             resident_bytes: 1,
+            footprint_bytes: None,
         }],
         listed: 3,
         unreadable: 2,

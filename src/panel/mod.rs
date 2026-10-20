@@ -14,15 +14,16 @@ mod summary;
 #[cfg(test)]
 mod tests;
 
-use crate::advice::{GIB, MIB};
+use crate::advice::{GB, GIB, MIB};
 use crate::alerts::Sample;
-use crate::model::{Pressure, RateStatus, Severity};
+use crate::model::{Pressure, RateStatus, Severity, ThermalState};
 use crate::monitor::{
     unmeasured, ActiveRule, Current, Group, Health, Issue, Latest, Mark, Monitor, Processes,
     Recovery, Tool, INTERVAL_PRESETS,
 };
+use crate::optimize::{Focus, Optimization, QuitState};
 
-pub use chart::{cpu_chart, memory_chart, swap_chart};
+pub use chart::{cpu_chart, memory_chart, swap_chart, temperature_chart};
 use format::*;
 pub use format::{clock, interval_label, percent, rate, span};
 use reading::*;
@@ -33,6 +34,7 @@ pub enum Resource {
     Memory,
     Cpu,
     Disk,
+    Thermal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +45,8 @@ pub enum Route {
     Handling(Group),
     Processes,
     Settings,
+    /// Ask the apps behind an issue to quit normally.
+    Optimize(Group),
 }
 
 impl Route {
@@ -52,6 +56,8 @@ impl Route {
             Route::Detail(Resource::Memory) => "内存",
             Route::Detail(Resource::Cpu) => "处理器",
             Route::Detail(Resource::Disk) => "磁盘空间",
+            Route::Detail(Resource::Thermal) => "温度",
+            Route::Optimize(_) => "一键优化",
             Route::Issues => "问题列表",
             Route::Handling(_) => "处理方法",
             Route::Processes => "进程排行",
@@ -106,6 +112,12 @@ pub enum Command {
     /// Collect a sample now.
     Retry,
     RefreshProcesses,
+    /// Analyse which open apps drive an issue, then show them for confirmation.
+    Optimize(Group),
+    /// Select or clear one app in the optimization list.
+    ToggleApp(u32),
+    /// Ask the selected apps to quit normally.
+    QuitSelected,
     More,
     Quit,
 }
@@ -182,6 +194,15 @@ pub struct ProcessRow {
     pub fraction: f64,
 }
 
+/// One checkbox row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Check {
+    pub title: String,
+    pub detail: String,
+    pub checked: bool,
+    pub command: Command,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Block {
     Conclusion {
@@ -230,6 +251,7 @@ pub enum Block {
         label: String,
     },
     Processes(Vec<ProcessRow>),
+    Checks(Vec<Check>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -274,6 +296,8 @@ pub fn page(monitor: &Monitor, route: Route, back: Option<Route>, now: u64) -> P
         Route::Detail(Resource::Memory) => pages::memory_detail(&view, &mut blocks),
         Route::Detail(Resource::Cpu) => pages::cpu_detail(&view, &mut blocks),
         Route::Detail(Resource::Disk) => pages::disk_detail(&view, &mut blocks),
+        Route::Detail(Resource::Thermal) => pages::thermal_detail(&view, &mut blocks),
+        Route::Optimize(group) => pages::optimize(&view, group, &mut blocks),
         Route::Issues => pages::issues(&view, &mut blocks),
         Route::Handling(group) => pages::handling(&view, group, &mut blocks),
         Route::Processes => pages::processes(&view, &mut blocks),

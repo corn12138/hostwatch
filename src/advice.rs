@@ -1,6 +1,8 @@
-use crate::model::{Advice, Pressure, RateStatus, Severity, Snapshot};
+use crate::model::{Advice, Pressure, RateStatus, Severity, Snapshot, ThermalState};
 
 pub const GIB: u64 = 1024 * 1024 * 1024;
+/// Decimal gigabyte, the unit Finder and System Settings use for storage.
+pub const GB: u64 = 1_000_000_000;
 pub const MIB: f64 = 1024.0 * 1024.0;
 
 /// Product heuristics, not Apple limits. Swap traffic counts both directions.
@@ -27,6 +29,7 @@ const MEMORY_ACTION: &str = "打开活动监视器 → 内存，查看高占用�
 const SWAP_ACTION: &str = "系统正在频繁读写交换文件，这通常会直接导致卡顿：打开活动监视器 → 内存，按「内存」排序，关闭不需要的大型应用或标签页；不要手动删除交换文件。";
 const CPU_ACTION: &str = "打开活动监视器 → CPU，按「% CPU」排序找出持续占用的应用；确认无正在进行的工作后再正常退出。短时编译、索引或备份属于正常现象。";
 const DISK_ACTION: &str = "打开系统设置 → 通用 → 储存空间，优先审查下载、大型文件和不用的应用；确认备份与用途后再手动删除。不要直接删除系统目录或交换文件。";
+const THERMAL_ACTION: &str = "macOS 报告散热压力，已在降低性能保护硬件：保持通风、不要放在软垫上，退出不需要的高负载应用（活动监视器 → CPU）；持续过热请检查风扇与灰尘。";
 
 pub fn assess(snapshot: &Snapshot) -> Vec<Finding> {
     let memory = &snapshot.memory;
@@ -88,11 +91,13 @@ pub fn assess(snapshot: &Snapshot) -> Vec<Finding> {
     };
     let disk = match &snapshot.disk {
         Some(disk) => {
-            let ratio = disk.available_bytes as f64 / disk.total_bytes as f64;
+            // The available figure Finder shows: purgeable space is reclaimed by macOS on demand.
+            let available = disk.usable_bytes();
+            let ratio = available as f64 / disk.total_bytes as f64;
             // Absolute space catches small volumes; percentage catches large ones.
-            let severity = if disk.available_bytes < 5 * GIB || ratio < 0.05 {
+            let severity = if available < 5 * GB || ratio < 0.05 {
                 Some(Severity::Critical)
-            } else if disk.available_bytes < 20 * GIB || ratio < 0.15 {
+            } else if available < 20 * GB || ratio < 0.15 {
                 Some(Severity::Warning)
             } else {
                 None
@@ -101,15 +106,27 @@ pub fn assess(snapshot: &Snapshot) -> Vec<Finding> {
                 Some(severity) => Observation::Abnormal(
                     severity,
                     format!(
-                        "{} 可用 {:.2} GiB（{:.1}%）",
+                        "{} 可用 {:.1} GB（{:.1}%）",
                         disk.path,
-                        disk.available_bytes as f64 / GIB as f64,
+                        available as f64 / GB as f64,
                         ratio * 100.0
                     ),
                 ),
                 None => Observation::Clear,
             }
         }
+        None => Observation::Unknown,
+    };
+    let thermal = match snapshot.thermal.as_ref().and_then(|t| t.state) {
+        Some(ThermalState::Critical) => Observation::Abnormal(
+            Severity::Critical,
+            "系统散热等级：严重，macOS 正在大幅降低性能".into(),
+        ),
+        Some(ThermalState::Serious) => Observation::Abnormal(
+            Severity::Warning,
+            "系统散热等级：偏高，macOS 可能已降低性能".into(),
+        ),
+        Some(_) => Observation::Clear,
         None => Observation::Unknown,
     };
     vec![
@@ -132,6 +149,11 @@ pub fn assess(snapshot: &Snapshot) -> Vec<Finding> {
             id: "disk_space",
             observation: disk,
             action: DISK_ACTION,
+        },
+        Finding {
+            id: "thermal_state",
+            observation: thermal,
+            action: THERMAL_ACTION,
         },
     ]
 }
@@ -164,19 +186,17 @@ pub fn evaluate(snapshot: &Snapshot) -> Vec<Advice> {
     let core_clear = observed("memory_pressure") == Some(&Observation::Clear)
         && observed("disk_space") == Some(&Observation::Clear);
     if core_clear && advice.is_empty() {
-        let unmeasured: Vec<&str> = ["swap_activity", "cpu_saturation"]
+        let unmeasured: Vec<&str> = ["swap_activity", "cpu_saturation", "thermal_state"]
             .into_iter()
             .filter(|id| observed(id) == Some(&Observation::Unknown))
-            .map(|id| {
-                if id == "swap_activity" {
-                    "交换读写"
-                } else {
-                    "CPU"
-                }
+            .map(|id| match id {
+                "swap_activity" => "交换读写",
+                "cpu_saturation" => "CPU",
+                _ => "散热状态",
             })
             .collect();
         let mut evidence =
-            String::from("当前样本未见内存压力、交换频繁、CPU 饱和或启动卷空间不足。");
+            String::from("当前样本未见内存压力、交换频繁、CPU 饱和、过热或启动卷空间不足。");
         if !unmeasured.is_empty() {
             evidence = format!(
                 "当前样本未见内存压力或启动卷空间不足；{}本次未能测得。",
@@ -187,7 +207,7 @@ pub fn evaluate(snapshot: &Snapshot) -> Vec<Advice> {
             id: "no_observed_pressure",
             severity: Severity::Info,
             evidence,
-            action: "若仍卡顿，在卡顿发生时再次采样或运行 watch 观察持续情况；当前工具尚未测量磁盘 I/O、温度或单个应用无响应，无需为了降低内存数字而清缓存。",
+            action: "若仍卡顿，在卡顿发生时再次采样或运行 watch 观察持续情况；当前工具尚未测量磁盘 I/O 或单个应用无响应，无需为了降低内存数字而清缓存。",
         });
     }
     advice
@@ -197,7 +217,7 @@ pub fn evaluate(snapshot: &Snapshot) -> Vec<Advice> {
 pub mod tests {
     use super::*;
     use crate::activity;
-    use crate::model::{Activity, Disk, Memory, Swap};
+    use crate::model::{Activity, Disk, Memory, Swap, Thermal};
 
     pub fn snapshot(pressure: Pressure, free: u64) -> Snapshot {
         Snapshot {
@@ -217,6 +237,13 @@ pub mod tests {
                 path: "/data".into(),
                 total_bytes: 1000 * GIB,
                 available_bytes: free,
+                important_available_bytes: None,
+            }),
+            thermal: Some(Thermal {
+                state: Some(ThermalState::Nominal),
+                cpu_celsius: Some(45.0),
+                cpu_max_celsius: Some(48.0),
+                battery_celsius: None,
             }),
             processes_requested: false,
             top_processes: vec![],
@@ -303,8 +330,44 @@ pub mod tests {
     }
 
     #[test]
+    fn purgeable_space_counts_as_available_like_finder() {
+        let mut sample = snapshot(Pressure::Normal, 100 * GIB);
+        assert_eq!(evaluate(&sample)[0].severity, Severity::Warning);
+        sample.disk.as_mut().unwrap().important_available_bytes = Some(400 * GIB);
+        assert_eq!(evaluate(&sample)[0].id, "no_observed_pressure");
+        // Never reported below what a normal write can already use.
+        sample.disk.as_mut().unwrap().important_available_bytes = Some(GIB);
+        assert_eq!(sample.disk.as_ref().unwrap().usable_bytes(), 100 * GIB);
+    }
+
+    #[test]
+    fn thermal_pressure_follows_the_system_level() {
+        let mut sample = snapshot(Pressure::Normal, 300 * GIB);
+        for (state, expected) in [
+            (ThermalState::Fair, None),
+            (ThermalState::Serious, Some(Severity::Warning)),
+            (ThermalState::Critical, Some(Severity::Critical)),
+        ] {
+            sample.thermal.as_mut().unwrap().state = Some(state);
+            let thermal = evaluate(&sample)
+                .into_iter()
+                .find(|a| a.id == "thermal_state")
+                .map(|a| a.severity);
+            assert_eq!(thermal, expected);
+        }
+        // A high reading alone is not an alert; only the system's own level is.
+        sample.thermal.as_mut().unwrap().state = Some(ThermalState::Nominal);
+        sample.thermal.as_mut().unwrap().cpu_celsius = Some(99.0);
+        assert_eq!(evaluate(&sample)[0].id, "no_observed_pressure");
+        sample.thermal = None;
+        assert!(evaluate(&sample)[0]
+            .evidence
+            .contains("散热状态本次未能测得"));
+    }
+
+    #[test]
     fn absolute_space_protects_small_volumes() {
-        let mut sample = snapshot(Pressure::Normal, 19 * GIB);
+        let mut sample = snapshot(Pressure::Normal, 18 * GIB);
         sample.disk.as_mut().unwrap().total_bytes = 100 * GIB;
         assert_eq!(evaluate(&sample)[0].severity, Severity::Warning);
         sample.disk.as_mut().unwrap().available_bytes = 4 * GIB;

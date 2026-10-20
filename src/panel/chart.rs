@@ -240,3 +240,38 @@ pub fn swap_chart(monitor: &Monitor) -> Chart {
         |s| s.swap_traffic_bytes_per_second.map(|v| v / MIB),
     )
 }
+
+pub fn temperature_chart(monitor: &Monitor) -> Chart {
+    let peak = monitor
+        .history()
+        .samples()
+        .filter_map(|s| s.cpu_celsius)
+        .fold(0.0, f64::max);
+    let y_max = if peak > 100.0 {
+        nice_ceiling(peak)
+    } else {
+        100.0
+    };
+    chart(
+        monitor,
+        Spec {
+            title: "芯片温度",
+            unit: "°C",
+            format: celsius_label,
+            empty: if monitor.history().len() == 0 {
+                "正在读取，还没有历史数据"
+            } else {
+                "本机读不到芯片温度（显示为未知，不是 0）"
+            },
+            tone: Tone::Neutral,
+        },
+        y_max,
+        vec![
+            (0.0, "0".into()),
+            (50.0, "50".into()),
+            (y_max, format!("{y_max:.0}")),
+        ],
+        Vec::new(),
+        |s| s.cpu_celsius,
+    )
+}

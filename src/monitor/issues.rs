@@ -12,16 +12,18 @@ pub enum Group {
     Memory,
     Cpu,
     Disk,
+    Thermal,
 }
 
 impl Group {
-    pub const ALL: [Group; 3] = [Group::Memory, Group::Cpu, Group::Disk];
+    pub const ALL: [Group; 4] = [Group::Memory, Group::Cpu, Group::Disk, Group::Thermal];
 
     pub fn rules(self) -> &'static [&'static str] {
         match self {
             Group::Memory => &["memory_pressure", "swap_activity"],
             Group::Cpu => &["cpu_saturation"],
             Group::Disk => &["disk_space"],
+            Group::Thermal => &["thermal_state"],
         }
     }
 

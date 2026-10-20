@@ -6,7 +6,7 @@ mod macos;
 mod windows;
 
 #[cfg(target_os = "macos")]
-pub use macos::scan_processes;
+pub use macos::{process_table, scan_processes, ProcTable, RankBy};
 
 pub trait Collector {
     fn collect(&mut self, processes: bool) -> Result<Snapshot, String>;

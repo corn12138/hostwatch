@@ -2,6 +2,7 @@ use super::*;
 use crate::advice::tests::{ready, snapshot};
 use crate::model::{Process, ProcessScan, SourceStatus};
 use crate::monitor::tests::{at, normal};
+use crate::optimize::QuitState;
 
 fn texts(page: &Page) -> Vec<String> {
     let mut out = Vec::new();
@@ -47,6 +48,10 @@ fn texts(page: &Page) -> Vec<String> {
                 rows.iter()
                     .map(|r| format!("{} {} {}", r.rank, r.name, r.size)),
             ),
+            Block::Checks(checks) => out.extend(checks.iter().map(|c| {
+                let mark = if c.checked { "x" } else { " " };
+                format!("[{mark}] {} {}", c.title, c.detail)
+            })),
         }
     }
     out
@@ -102,7 +107,7 @@ fn quiet_home_when_nothing_needs_attention() {
     assert!(
         matches!(&page.blocks[0], Block::Conclusion { tone: Tone::Ok, title, .. } if title == "目前无需处理")
     );
-    assert_eq!(page.blocks.len(), 4, "conclusion + three rows, no card");
+    assert_eq!(page.blocks.len(), 5, "conclusion + four rows, no card");
     assert_eq!(resource(&page, Resource::Cpu).0, "20%");
     assert_eq!(page.footer.interval.title, "每 30 秒采样");
 }
@@ -365,6 +370,7 @@ fn process_page_lifecycle() {
                 pid: 9,
                 name: "evil\nname".into(),
                 resident_bytes: 3 * GIB,
+                footprint_bytes: None,
             }],
             listed: 400,
             unreadable: 120,
@@ -439,4 +445,145 @@ fn clock_and_span_formatting() {
     assert_eq!(span(3900), "约 1 小时 5 分钟");
     assert_eq!(interval_label(300), "5 分钟");
     assert_eq!(interval_label(90), "90 秒");
+}
+
+#[test]
+fn disk_matches_storage_settings_units_and_purgeable_space() {
+    let mut monitor = Monitor::new(30);
+    let mut s = normal(0);
+    let disk = s.disk.as_mut().unwrap();
+    disk.total_bytes = 994_662_584_320;
+    disk.available_bytes = 282_900_000_000;
+    disk.important_available_bytes = Some(306_200_000_000);
+    monitor.record(Ok(s), 0);
+    let home = home(&monitor, 0);
+    assert_eq!(resource(&home, Resource::Disk).0, "306.2 GB 可用");
+    let detail = page_for(&monitor, Route::Detail(Resource::Disk));
+    assert!(has(&detail, "306.2 GB 可用"));
+    assert!(has(&detail, "其中系统可自动释放：23.3 GB"));
+    assert!(has(&detail, "总容量：994.7 GB"));
+}
+
+#[test]
+fn temperature_row_detail_and_alert() {
+    let mut monitor = Monitor::new(30);
+    monitor.record(Ok(normal(0)), 0);
+    let page = home(&monitor, 0);
+    assert_eq!(
+        resource(&page, Resource::Thermal),
+        ("45°C", "正常", Tone::Ok, false)
+    );
+    let detail = page_for(&monitor, Route::Detail(Resource::Thermal));
+    assert!(has(&detail, "45 °C 芯片平均 · 散热正常"));
+    assert!(has(&detail, "芯片最高：48°C"));
+    let chart = temperature_chart(&monitor);
+    assert_eq!(chart.segments[0][0], (0, 45.0));
+
+    // macOS's own level drives the alert; warning needs two samples like other rules.
+    for t in [30, 60] {
+        let mut s = normal(t);
+        s.thermal.as_mut().unwrap().state = Some(ThermalState::Serious);
+        s.thermal.as_mut().unwrap().cpu_celsius = Some(92.0);
+        monitor.record(Ok(s), t);
+    }
+    let page = home(&monitor, 60);
+    assert!(has(&page, "电脑有点热，可能已降速"));
+    assert!(has(&page, "系统散热等级偏高（芯片约 92°C）"));
+    assert!(commands(&page).contains(&Command::Optimize(Group::Thermal)));
+    // Fair is the system's normal warm state, not an alert.
+    let mut fair = Monitor::new(30);
+    let mut s = normal(0);
+    s.thermal.as_mut().unwrap().state = Some(ThermalState::Fair);
+    fair.record(Ok(s), 0);
+    assert_eq!(resource(&home(&fair, 0), Resource::Thermal).1, "偏热");
+    assert!(fair.issues().is_empty());
+}
+
+#[test]
+fn processes_rank_by_activity_monitor_memory() {
+    let mut monitor = Monitor::new(30);
+    monitor.begin_processes(1);
+    monitor.finish_processes(
+        Ok(ProcessScan {
+            top: vec![Process {
+                pid: 9,
+                name: "Safari".into(),
+                resident_bytes: GIB,
+                footprint_bytes: Some(3 * GIB),
+            }],
+            listed: 1,
+            unreadable: 0,
+        }),
+        2,
+    );
+    assert!(has(
+        &page_for(&monitor, Route::Processes),
+        "1 Safari 3.0 GiB"
+    ));
+}
+
+#[test]
+fn optimize_page_from_analysis_to_checked_outcomes() {
+    use crate::optimize::{Candidate, QuitOutcome};
+    let mut monitor = Monitor::new(30);
+    for t in [0, 30] {
+        monitor.record(Ok(at(snapshot(Pressure::Critical, 300 * GIB), t)), t);
+    }
+    let card = home(&monitor, 30);
+    assert!(commands(&card).contains(&Command::Optimize(Group::Memory)));
+    let route = Route::Optimize(Group::Memory);
+    monitor.optimizer_mut().begin(Group::Memory, 31);
+    assert!(has(&page_for(&monitor, route), "正在分析已打开的应用"));
+    let app = |pid, name: &str, gib, active, selected| Candidate {
+        pid,
+        name: name.into(),
+        bundle_id: None,
+        footprint_bytes: gib * GIB,
+        cpu_percent: 0.0,
+        processes: 4,
+        active,
+        selected,
+    };
+    monitor.optimizer_mut().finish(
+        Ok(vec![
+            app(1, "Browser", 6, false, true),
+            app(2, "Editor", 2, true, false),
+        ]),
+        32,
+    );
+    let page = page_for(&monitor, route);
+    assert!(has(&page, "[x] Browser 6.0 GiB · 4 个进程"));
+    assert!(has(&page, "[ ] Editor 2.0 GiB · 4 个进程 · 正在使用"));
+    assert!(has(&page, "退出所选的 1 个应用"));
+    assert!(has(&page, "不会强制结束进程"));
+    monitor.optimizer_mut().toggle(1);
+    let page = page_for(&monitor, route);
+    let quit = page.blocks.iter().find_map(|b| match b {
+        Block::Buttons(b) if b[0].command == Command::QuitSelected => Some(b[0].enabled),
+        _ => None,
+    });
+    assert_eq!(quit, Some(false), "nothing selected, nothing to quit");
+    monitor.optimizer_mut().toggle(1);
+    let issues_before = monitor.issues();
+    monitor.optimizer_mut().applied(
+        vec![QuitOutcome {
+            pid: 1,
+            name: "Browser".into(),
+            state: QuitState::Requested,
+        }],
+        33,
+    );
+    monitor.optimizer_mut().verified(|_| false, true);
+    let page = page_for(&monitor, route);
+    assert!(has(&page, "Browser：仍在运行（可能在等你保存或确认）"));
+    assert_eq!(
+        monitor.issues(),
+        issues_before,
+        "quitting apps is not a sample"
+    );
+    // Disk issues never offer an automatic action.
+    assert!(has(
+        &page_for(&monitor, Route::Optimize(Group::Disk)),
+        "不会自动删除任何文件"
+    ));
 }

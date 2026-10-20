@@ -1,0 +1,31 @@
+[05:23:11] opened: health=Warmup routes=[Home] paused=false interval=5 timer=5s history=1 latest=Warmup cpu=None shown=true conclusion="正在准备"
+[05:23:17] captured 20-home-four-rows
+[05:23:17] disk statfs=280471138304 important=Some(303703460823) thermal=Some(Thermal { state: Some(Nominal), cpu_celsius: Some(46.65807037353515), cpu_max_celsius: Some(48.87886047363281), battery_celsius: Some(30.966659545898438) })
+[05:23:17] click Go(Detail(Thermal)) title="" enabled=true hit_test_topmost=true
+[05:23:17] captured 21-temperature
+[05:23:17] click Back title="‹ 概览" enabled=true hit_test_topmost=true
+[05:23:18] click Go(Detail(Disk)) title="" enabled=true hit_test_topmost=true
+[05:23:18] captured 22-disk
+[05:23:18] click Back title="‹ 概览" enabled=true hit_test_topmost=true
+[05:23:18] click RefreshProcesses title="读取" enabled=true hit_test_topmost=true
+[05:23:21] captured 23-processes-footprint
+[05:23:21] processes: footprints MiB = [10425, 7140, 1753, 1351, 1261]
+[05:23:21] click Back title="‹ 概览" enabled=true hit_test_topmost=true
+[05:23:21] optimize started: routes=[Home, Optimize(Memory)]
+[05:23:21] captured 24-optimize-analyzing
+[05:23:23] memory plan ready: 5 candidates, selected 3, footprints MiB [28960, 4125, 3070, 2529, 1616]; plan job joined: true
+[05:23:23] captured 25-optimize-memory-list
+[05:23:26] cpu plan ready: [(265.0, 161), (51.0, 22), (15.0, 21), (12.0, 25)]
+[05:23:26] captured 26-optimize-cpu-list
+[05:23:27] launched Calculator: true
+[05:23:30] Calculator pid Some(91917)
+[05:23:31] captured 27-optimize-calculator-selected
+[05:23:31] click QuitSelected title="退出所选的 1 个应用" enabled=true hit_test_topmost=true
+[05:23:31] after quit click: Some(Applied { group: Memory, at: 1792488211, outcomes: [QuitOutcome { pid: 91917, name: "计算器", state: Requested }] })
+[05:23:31] captured 28-optimize-requested
+[05:23:53] after verify: Some(Applied { group: Memory, at: 1792488211, outcomes: [QuitOutcome { pid: 91917, name: "计算器", state: Quit }] })
+[05:23:53] Calculator still running per pgrep: false
+[05:23:53] captured 29-optimize-verified
+[05:23:54] quit via More menu item
+exit=0
+no leftover process

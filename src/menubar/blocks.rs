@@ -243,6 +243,74 @@ impl Kit<'_> {
                     .max(16.0)
             }
             Block::Processes(rows) => self.process_rows(parent, rows, x, y, w),
+            Block::Checks(checks) => {
+                let card = ShapeView::new(mtm, Shape::Card(None), rect(x, y, w, 10.0));
+                let inner = w - 24.0;
+                let mut cy = 4.0;
+                for (i, check) in checks.iter().enumerate() {
+                    if i > 0 {
+                        self.put(
+                            &card,
+                            &ShapeView::new(mtm, Shape::Rule, rect(0.0, 0.0, 0.0, 0.0)),
+                            12.0,
+                            cy,
+                            inner,
+                            1.0,
+                        );
+                    }
+                    cy += 6.0;
+                    // SAFETY: `perform:` is defined on the target, which lives for the whole app.
+                    let control = unsafe {
+                        NSButton::checkboxWithTitle_target_action(
+                            &NSString::from_str(&check.title),
+                            Some(self.target),
+                            Some(sel!(perform:)),
+                            mtm,
+                        )
+                    };
+                    control.setTag(self.tag(&check.command));
+                    control.setState(if check.checked {
+                        NSControlStateValueOn
+                    } else {
+                        NSControlStateValueOff
+                    });
+                    control.setAccessibilityLabel(Some(&NSString::from_str(&format!(
+                        "{}，{}",
+                        check.title, check.detail
+                    ))));
+                    control.sizeToFit();
+                    let height = control.frame().size.height;
+                    let (detail, dh) = self.label(
+                        &check.detail,
+                        12.0,
+                        regular,
+                        &secondary,
+                        inner * 0.55,
+                        false,
+                    );
+                    detail.setAlignment(NSTextAlignment::Right);
+                    let dw = detail
+                        .sizeThatFits(NSSize::new(inner, 30.0))
+                        .width
+                        .ceil()
+                        .min(inner * 0.55);
+                    let cw = control.frame().size.width.min(inner - dw - 8.0);
+                    self.put(&card, &control, 12.0, cy, cw, height);
+                    self.put(
+                        &card,
+                        &detail,
+                        12.0 + inner - dw,
+                        cy + (height - dh) / 2.0,
+                        dw,
+                        dh,
+                    );
+                    cy += height + 6.0;
+                }
+                cy += 4.0;
+                card.setFrameSize(NSSize::new(w, cy));
+                parent.addSubview(&card);
+                cy
+            }
             Block::Resource { .. } => 0.0,
         }
     }

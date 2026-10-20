@@ -61,6 +61,25 @@ pub(crate) fn gib(bytes: u64) -> String {
     format!("{:.1}", bytes as f64 / GIB as f64)
 }
 
+/// Storage in decimal gigabytes, as Finder and System Settings show it.
+pub(crate) fn gb(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / GB as f64)
+}
+
+pub(crate) fn celsius_label(celsius: f64) -> String {
+    format!("{celsius:.0}°C")
+}
+
+pub(crate) fn thermal_label(state: Option<ThermalState>) -> &'static str {
+    match state {
+        Some(ThermalState::Nominal) => "正常",
+        Some(ThermalState::Fair) => "偏热",
+        Some(ThermalState::Serious) => "偏高",
+        Some(ThermalState::Critical) => "严重",
+        None => "未知",
+    }
+}
+
 pub(crate) fn size(bytes: u64) -> String {
     if bytes >= GIB {
         format!("{} GiB", gib(bytes))
@@ -100,6 +119,7 @@ pub(crate) fn rule_name(id: &str) -> &'static str {
         "swap_activity" => "交换读写",
         "cpu_saturation" => "处理器使用率",
         "disk_space" => "磁盘空间",
+        "thermal_state" => "散热",
         _ => "检查项",
     }
 }

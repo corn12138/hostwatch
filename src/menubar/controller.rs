@@ -2,6 +2,9 @@
 
 use super::*;
 
+pub(super) type ScanJob = Job<Result<ProcessScan, String>>;
+pub(super) type PlanJob = Job<Result<Vec<Candidate>, String>>;
+
 pub(super) struct Ivars {
     pub(super) monitor: RefCell<Monitor>,
     pub(super) collector: RefCell<Box<dyn Collector>>,
@@ -19,7 +22,10 @@ pub(super) struct Ivars {
     pub(super) status: RefCell<Option<(Tone, String)>>,
     pub(super) rendered: Cell<Option<(Health, Route)>>,
     pub(super) closed_at: Cell<Option<Instant>>,
-    pub(super) scan: RefCell<Option<(JoinHandle<()>, ScanSlot)>>,
+    pub(super) scan: RefCell<Option<ScanJob>>,
+    pub(super) plan: RefCell<Option<PlanJob>>,
+    /// Checks left before pending quit requests are reported as still running.
+    pub(super) quit_checks: Cell<u32>,
 }
 
 define_class!(
@@ -47,10 +53,16 @@ define_class!(
             }
         }
 
-        // SAFETY: as above; runs only while a process scan is in flight.
-        #[unsafe(method(pollScan:))]
-        fn poll_scan(&self, _timer: &NSTimer) {
-            self.collect_scan(false);
+        // SAFETY: as above; runs only while a background job is in flight.
+        #[unsafe(method(pollJobs:))]
+        fn poll_jobs_tick(&self, _timer: &NSTimer) {
+            self.collect_jobs(false);
+        }
+
+        // SAFETY: as above; a one-shot timer a few seconds after quit requests.
+        #[unsafe(method(verifyQuit:))]
+        fn verify_quit(&self, _timer: &NSTimer) {
+            self.verify_quit_requests();
         }
 
         // SAFETY: controls send their action with themselves as the argument.
@@ -126,6 +138,8 @@ impl Controller {
             rendered: Cell::new(None),
             closed_at: Cell::new(None),
             scan: RefCell::new(None),
+            plan: RefCell::new(None),
+            quit_checks: Cell::new(0),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -257,10 +271,23 @@ impl Controller {
         seconds: f64,
         selector: objc2::runtime::Sel,
     ) -> Retained<NSTimer> {
+        self.add_timer(seconds, selector, true)
+    }
+
+    pub(super) fn once(&self, seconds: f64, selector: objc2::runtime::Sel) {
+        self.add_timer(seconds, selector, false);
+    }
+
+    fn add_timer(
+        &self,
+        seconds: f64,
+        selector: objc2::runtime::Sel,
+        repeats: bool,
+    ) -> Retained<NSTimer> {
         // SAFETY: the selector takes one object argument; the timer retains `self` until invalidated.
         let timer = unsafe {
             NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
-                seconds, self, selector, None, true,
+                seconds, self, selector, None, repeats,
             )
         };
         // Lets macOS coalesce wakeups with other timers.

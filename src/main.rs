@@ -8,6 +8,8 @@ mod model;
 #[cfg(any(target_os = "macos", test))]
 mod monitor;
 #[cfg(any(target_os = "macos", test))]
+mod optimize;
+#[cfg(any(target_os = "macos", test))]
 mod panel;
 mod platform;
 
@@ -17,7 +19,7 @@ use std::{
 };
 
 use alerts::{Engine, History, Policy, Sample};
-use model::{EventKind, Pressure, RateStatus, Report, SCHEMA_VERSION};
+use model::{EventKind, Pressure, RateStatus, Report, ThermalState, SCHEMA_VERSION};
 
 fn main() {
     if let Err(error) = run() {
@@ -171,16 +173,37 @@ fn render(out: &mut impl Write, report: &Report, history: Option<&History>) -> i
         RateStatus::Unavailable => writeln!(out, "活动：计数器不可用")?,
     }
     if let Some(disk) = &snapshot.disk {
+        let gb = |bytes: u64| bytes as f64 / advice::GB as f64;
         writeln!(
             out,
-            "磁盘 {}：可用 {:.2} / {:.2} GiB（{:.1}% 可用）",
+            "磁盘 {}：可用 {:.1} / {:.1} GB（{:.1}% 可用{}）",
             disk.path,
-            gib(disk.available_bytes),
-            gib(disk.total_bytes),
-            disk.available_bytes as f64 / disk.total_bytes as f64 * 100.0
+            gb(disk.usable_bytes()),
+            gb(disk.total_bytes),
+            disk.usable_bytes() as f64 / disk.total_bytes as f64 * 100.0,
+            if disk.important_available_bytes.is_some() {
+                "，含系统可自动释放的空间"
+            } else {
+                ""
+            }
         )?;
     } else {
         writeln!(out, "磁盘：数据不可用")?;
+    }
+    if let Some(thermal) = &snapshot.thermal {
+        let state = match thermal.state {
+            Some(ThermalState::Nominal) => "正常",
+            Some(ThermalState::Fair) => "偏热",
+            Some(ThermalState::Serious) => "偏高（可能降速）",
+            Some(ThermalState::Critical) => "严重（降速）",
+            None => "未知",
+        };
+        match (thermal.cpu_celsius, thermal.cpu_max_celsius) {
+            (Some(mean), Some(max)) => {
+                writeln!(out, "散热：{state} | 芯片 {mean:.0}°C（最高 {max:.0}°C）")?
+            }
+            _ => writeln!(out, "散热：{state}")?,
+        }
     }
     if let Some(history) = history.filter(|h| h.len() > 1) {
         let t = history.trend();

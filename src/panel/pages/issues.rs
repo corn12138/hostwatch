@@ -80,12 +80,21 @@ pub(crate) fn handling(view: &View, group: Group, blocks: &mut Vec<Block>) {
         issue_steps(group).iter().map(|s| s.to_string()).collect(),
     ));
     let tool = group.tool();
-    let mut buttons =
-        vec![Button::new(format!("打开{}", tool.label()), Command::Open(tool)).primary()];
+    let mut buttons = Vec::new();
+    if Focus::for_group(group).is_some() {
+        buttons.push(Button::new("一键优化", Command::Optimize(group)).primary());
+        buttons.push(Button::new(
+            format!("打开{}", tool.label()),
+            Command::Open(tool),
+        ));
+    } else {
+        buttons.push(Button::new(format!("打开{}", tool.label()), Command::Open(tool)).primary());
+    }
     let detail = match group {
         Group::Memory => ("查看内存详情", Resource::Memory),
         Group::Cpu => ("查看处理器详情", Resource::Cpu),
         Group::Disk => ("查看磁盘详情", Resource::Disk),
+        Group::Thermal => ("查看温度详情", Resource::Thermal),
     };
     buttons.push(Button::new(detail.0, Command::Go(Route::Detail(detail.1))));
     blocks.push(Block::Buttons(buttons));

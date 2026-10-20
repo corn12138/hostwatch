@@ -2,7 +2,7 @@ use super::*;
 
 pub(crate) fn processes(view: &View, blocks: &mut Vec<Block>) {
     blocks.push(Block::Text(
-        "按常驻内存（RSS）列出可读取的前 5 个进程，只在你点“读取”时扫描。占用大不代表它让电脑变慢或有问题。"
+        "按内存占用列出可读取的前 5 个进程（与活动监视器“内存”列同一口径），只在你点“读取”时扫描。占用大不代表它让电脑变慢或有问题。"
             .into(),
     ));
     let (loading, result) = match view.monitor.processes() {
@@ -33,7 +33,9 @@ pub(crate) fn processes(view: &View, blocks: &mut Vec<Block>) {
         match &result.outcome {
             Ok(scan) => {
                 blocks.push(Block::Note(format!("{prefix}读取于 {}", clock(result.at))));
-                let largest = scan.top.first().map_or(1, |p| p.resident_bytes.max(1));
+                let memory =
+                    |p: &crate::model::Process| p.footprint_bytes.unwrap_or(p.resident_bytes);
+                let largest = scan.top.first().map_or(1, |p| memory(p).max(1));
                 if scan.top.is_empty() {
                     blocks.push(Block::Text("没有读到任何进程的内存数据。".into()));
                 } else {
@@ -44,8 +46,8 @@ pub(crate) fn processes(view: &View, blocks: &mut Vec<Block>) {
                             .map(|(i, p)| ProcessRow {
                                 rank: i + 1,
                                 name: display_name(&p.name),
-                                size: size(p.resident_bytes),
-                                fraction: p.resident_bytes as f64 / largest as f64,
+                                size: size(memory(p)),
+                                fraction: memory(p) as f64 / largest as f64,
                             })
                             .collect(),
                     ));
@@ -66,8 +68,7 @@ pub(crate) fn processes(view: &View, blocks: &mut Vec<Block>) {
         }
     }
     blocks.push(Block::Note(
-        "只显示单个进程，不合并为应用；RSS 不等于活动监视器的“内存”列，多个进程的数值不能直接相加。"
-            .into(),
+        "只显示单个进程，不合并为应用；共享内存会在多个进程中各算一次，数值不能直接相加。".into(),
     ));
     blocks.push(Block::Buttons(vec![Button::new(
         "打开活动监视器",

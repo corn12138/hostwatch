@@ -5,9 +5,9 @@
 //! it keeps firing while the popover or its More menu is open. Popover views are rebuilt from
 //! `panel::page` only while the popover is shown (new sample, navigation or command); closing it
 //! drops them and monitoring continues. Pausing invalidates the timer; resuming starts a fresh
-//! collector so rates get a new baseline. The on-demand process scan runs on one short-lived worker
-//! thread that the main thread polls and joins, including at quit. Actions only open read-only
-//! system tools (Activity Monitor, Storage settings).
+//! collector so rates get a new baseline. The on-demand process scan and the optimization analysis
+//! run as short background jobs that the main thread polls and joins, including at quit. Actions
+//! open read-only system tools or, after the person confirms, ask chosen apps to quit normally.
 //!
 //! Layout: `controller` (app lifecycle, timers, popover), `commands` (what each control does),
 //! `render` (page → view tree), `kit`, `blocks` and `rows` (a small reusable view kit: labels,
@@ -17,14 +17,14 @@ mod blocks;
 mod commands;
 mod controller;
 mod draw;
+mod jobs;
 mod kit;
+mod optimizer;
 mod render;
 mod rows;
 mod views;
 
 use std::cell::{Cell, OnceCell, RefCell};
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
 use objc2::rc::{autoreleasepool, Retained, Weak};
@@ -39,8 +39,8 @@ use objc2_app_kit::{
     NSControlStateValueOn, NSFont, NSFontAttributeName, NSFontWeight, NSFontWeightMedium,
     NSFontWeightRegular, NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage,
     NSImageScaling, NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSMenu, NSMenuItem,
-    NSPopover, NSPopoverBehavior, NSPopoverDelegate, NSResponder, NSScreen, NSScrollView,
-    NSStatusBar, NSStatusItem, NSStringDrawing, NSTextAlignment, NSTextField,
+    NSPopover, NSPopoverBehavior, NSPopoverDelegate, NSResponder, NSRunningApplication, NSScreen,
+    NSScrollView, NSStatusBar, NSStatusItem, NSStringDrawing, NSTextAlignment, NSTextField,
     NSVariableStatusItemLength, NSView, NSViewController, NSWorkspace,
     NSWorkspaceDidWakeNotification,
 };
@@ -51,12 +51,14 @@ use objc2_foundation::{
 };
 
 use crate::model::ProcessScan;
-use crate::monitor::{Health, Monitor, Tool};
+use crate::monitor::{Group, Health, Monitor, Tool};
+use crate::optimize::{self, Candidate, QuitOutcome, QuitState, RunningApp};
 use crate::panel::{self, Block, Button, Chart, Command, Footer, Graphic, ProcessRow, Route, Tone};
 use crate::platform::{self, Collector};
 
 use controller::Controller;
 use draw::*;
+use jobs::Job;
 use kit::Kit;
 use views::*;
 
@@ -67,8 +69,6 @@ pub(super) const FOOTER: f64 = 40.0;
 pub(super) const MENU_PROCESSES: isize = 9001;
 pub(super) const MENU_SETTINGS: isize = 9002;
 pub(super) const MENU_QUIT: isize = 9003;
-
-type ScanSlot = Arc<Mutex<Option<Result<ProcessScan, String>>>>;
 
 pub(super) fn now_unix() -> u64 {
     SystemTime::now()

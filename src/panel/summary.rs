@@ -88,7 +88,7 @@ pub(crate) fn headline(view: &View) -> (Tone, String, String) {
         Health::Normal => (
             Tone::Ok,
             "目前无需处理".into(),
-            format!("内存、处理器、磁盘空间未见持续异常 · {}", sampled_at(view)),
+            format!("各项检查未见持续异常 · {}", sampled_at(view)),
         ),
     }
 }
@@ -111,6 +111,8 @@ pub(crate) fn issue_status(issue: &Issue) -> (Tone, &'static str) {
         Group::Cpu => "持续很高",
         Group::Disk if issue.severity >= Severity::Critical => "空间严重不足",
         Group::Disk => "空间不足",
+        Group::Thermal if issue.severity >= Severity::Critical => "过热",
+        Group::Thermal => "偏热",
     };
     (tone, text)
 }
@@ -121,6 +123,7 @@ pub(crate) fn resource_row(view: &View, resource: Resource) -> Block {
         Resource::Memory => Group::Memory,
         Resource::Cpu => Group::Cpu,
         Resource::Disk => Group::Disk,
+        Resource::Thermal => Group::Thermal,
     };
     let shown = shown(view);
     let dim = shown.is_some_and(|(_, old)| old);
@@ -135,6 +138,7 @@ pub(crate) fn resource_row(view: &View, resource: Resource) -> Block {
         Resource::Memory => "内存",
         Resource::Cpu => "处理器",
         Resource::Disk => "磁盘空间",
+        Resource::Thermal => "温度",
     };
     if let Some((latest, _)) = shown {
         let snapshot = &latest.snapshot;
@@ -172,14 +176,30 @@ pub(crate) fn resource_row(view: &View, resource: Resource) -> Block {
             }
             Resource::Disk => {
                 if let Some(disk) = &snapshot.disk {
-                    value = format!("{} GiB 可用", gib(disk.available_bytes));
-                    let used = 1.0 - disk.available_bytes as f64 / disk.total_bytes as f64;
+                    value = format!("{} 可用", gb(disk.usable_bytes()));
+                    let used = 1.0 - disk.usable_bytes() as f64 / disk.total_bytes as f64;
                     graphic = Some(Graphic::Bar {
                         fraction: used,
                         tone: Tone::Neutral,
                         label: format!("已用 {:.0}%", used * 100.0),
                     });
                     (tone, status) = (Tone::Ok, "充足".into());
+                }
+            }
+            Resource::Thermal => {
+                if let Some(thermal) = &snapshot.thermal {
+                    let state = thermal_label(thermal.state);
+                    value = thermal
+                        .cpu_celsius
+                        .map_or_else(|| state.to_string(), celsius_label);
+                    (tone, status) = match thermal.state {
+                        Some(ThermalState::Nominal) => (Tone::Ok, "正常".into()),
+                        // Fair is the system's normal warm state, not an alert.
+                        Some(ThermalState::Fair) => (Tone::Neutral, "偏热".into()),
+                        Some(ThermalState::Serious) => (Tone::Warning, "偏高".into()),
+                        Some(ThermalState::Critical) => (Tone::Critical, "严重".into()),
+                        None => (Tone::Unknown, "未知".into()),
+                    };
                 }
             }
         }
@@ -229,8 +249,17 @@ pub(crate) fn issue_card(view: &View, issue: &Issue, more: usize) -> Block {
     if matches!(issue.recovery, Recovery::Confirming { .. }) {
         body.push(recovery_line(issue));
     }
-    let mut buttons =
-        vec![Button::new("查看处理方法", Command::Go(Route::Handling(issue.group))).primary()];
+    let mut buttons = Vec::new();
+    if Focus::for_group(issue.group).is_some() {
+        buttons.push(Button::new("一键优化", Command::Optimize(issue.group)).primary());
+        buttons.push(Button::new(
+            "处理方法",
+            Command::Go(Route::Handling(issue.group)),
+        ));
+    } else {
+        buttons
+            .push(Button::new("查看处理方法", Command::Go(Route::Handling(issue.group))).primary());
+    }
     if more > 0 {
         buttons.push(Button::new(
             format!("另有 {more} 项 ›"),

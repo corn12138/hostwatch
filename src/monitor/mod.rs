@@ -14,6 +14,7 @@ use std::collections::VecDeque;
 use crate::advice::{self, Finding, Observation};
 use crate::alerts::{Engine, History, Policy, Sample};
 use crate::model::{ProcessScan, RateStatus, Severity, Snapshot};
+use crate::optimize::Optimizer;
 pub use issues::{ActiveRule, Current, Group, Issue, Recovery};
 
 pub const INTERVAL_PRESETS: [u64; 5] = [5, 10, 30, 60, 300];
@@ -142,6 +143,7 @@ pub struct Monitor {
     recovered: Option<(u64, Vec<Group>)>,
     processes: Processes,
     tool: Option<ToolFeedback>,
+    optimizer: Optimizer,
 }
 
 impl Monitor {
@@ -162,6 +164,7 @@ impl Monitor {
             recovered: None,
             processes: Processes::NotRead,
             tool: None,
+            optimizer: Optimizer::default(),
         }
     }
 
@@ -214,6 +217,15 @@ impl Monitor {
 
     pub fn tool_feedback(&self) -> Option<&ToolFeedback> {
         self.tool.as_ref()
+    }
+
+    pub fn optimizer(&self) -> &Optimizer {
+        &self.optimizer
+    }
+
+    /// Quit requests never touch samples or the Engine.
+    pub fn optimizer_mut(&mut self) -> &mut Optimizer {
+        &mut self.optimizer
     }
 
     pub fn record(&mut self, result: Result<Snapshot, String>, now: u64) {
@@ -395,6 +407,7 @@ pub fn unmeasured(latest: &Latest) -> Vec<&'static str> {
             "swap_activity" => "交换读写",
             "cpu_saturation" => "处理器使用率",
             "disk_space" => "磁盘空间",
+            "thermal_state" => "散热状态",
             other => other,
         })
         .collect()

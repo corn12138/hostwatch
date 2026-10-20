@@ -66,7 +66,21 @@ pub struct Activity {
 pub struct Disk {
     pub path: String,
     pub total_bytes: u64,
+    /// Free space a normal write can use right now (`statfs` f_bavail).
     pub available_bytes: u64,
+    /// What Finder and System Settings call available: free space plus purgeable space macOS
+    /// reclaims on demand for important writes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub important_available_bytes: Option<u64>,
+}
+
+impl Disk {
+    /// Available space as the system presents it to people.
+    pub fn usable_bytes(&self) -> u64 {
+        self.important_available_bytes
+            .unwrap_or(self.available_bytes)
+            .clamp(self.available_bytes, self.total_bytes)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -74,6 +88,31 @@ pub struct Process {
     pub pid: u32,
     pub name: String,
     pub resident_bytes: u64,
+    /// Physical footprint, the figure in Activity Monitor's Memory column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub footprint_bytes: Option<u64>,
+}
+
+/// macOS's own thermal level (`NSProcessInfo.thermalState`); above fair the system slows itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThermalState {
+    Nominal,
+    Fair,
+    Serious,
+    Critical,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Thermal {
+    pub state: Option<ThermalState>,
+    /// Mean and hottest CPU die sensor; absent where the sensors cannot be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_celsius: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_max_celsius: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_celsius: Option<f64>,
 }
 
 /// Result of one on-demand process-memory ranking pass.
@@ -103,6 +142,8 @@ pub struct Snapshot {
     pub memory: Memory,
     pub activity: Activity,
     pub disk: Option<Disk>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thermal: Option<Thermal>,
     pub processes_requested: bool,
     pub top_processes: Vec<Process>,
     pub sources: Vec<SourceStatus>,

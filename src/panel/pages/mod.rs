@@ -3,13 +3,15 @@
 mod detail;
 mod home;
 mod issues;
+mod optimize;
 mod processes;
 mod settings;
 
 use super::*;
-pub(crate) use detail::{cpu_detail, disk_detail, memory_detail};
+pub(crate) use detail::{cpu_detail, disk_detail, memory_detail, thermal_detail};
 pub(crate) use home::home;
 pub(crate) use issues::{handling, issues};
+pub(crate) use optimize::optimize;
 pub(crate) use processes::processes;
 pub(crate) use settings::settings;
 

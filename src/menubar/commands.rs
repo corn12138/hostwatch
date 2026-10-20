@@ -2,18 +2,29 @@
 
 use super::*;
 
+fn take_if<T: Send + 'static>(job: &RefCell<Option<Job<T>>>, wait: bool) -> Option<Job<T>> {
+    let ready = job.borrow().as_ref().is_some_and(|j| wait || j.done());
+    if ready {
+        job.borrow_mut().take()
+    } else {
+        None
+    }
+}
+
 impl Controller {
+    pub(super) fn navigate(&self, route: Route) {
+        let mut routes = self.ivars().routes.borrow_mut();
+        if let Some(i) = routes.iter().position(|r| *r == route) {
+            routes.truncate(i + 1);
+        } else {
+            routes.push(route);
+        }
+    }
+
     pub(super) fn handle(&self, command: Command) {
         let now = now_unix();
         match command {
-            Command::Go(route) => {
-                let mut routes = self.ivars().routes.borrow_mut();
-                if let Some(i) = routes.iter().position(|r| *r == route) {
-                    routes.truncate(i + 1);
-                } else {
-                    routes.push(route);
-                }
-            }
+            Command::Go(route) => self.navigate(route),
             Command::Back => {
                 let mut routes = self.ivars().routes.borrow_mut();
                 if routes.len() > 1 {
@@ -59,6 +70,17 @@ impl Controller {
                 return;
             }
             Command::RefreshProcesses => self.start_scan(now),
+            Command::Optimize(group) => {
+                self.navigate(Route::Optimize(group));
+                self.start_plan(group, now);
+            }
+            Command::ToggleApp(pid) => self
+                .ivars()
+                .monitor
+                .borrow_mut()
+                .optimizer_mut()
+                .toggle(pid),
+            Command::QuitSelected => self.quit_selected(now),
             Command::More => {
                 self.show_more();
                 return;
@@ -75,20 +97,12 @@ impl Controller {
         if !self.ivars().monitor.borrow_mut().begin_processes(now) {
             return;
         }
-        let slot: ScanSlot = Arc::new(Mutex::new(None));
-        let output = Arc::clone(&slot);
-        let worker = std::thread::Builder::new()
-            .name("hostwatch-processes".into())
-            .spawn(move || {
-                let result = platform::scan_processes();
-                if let Ok(mut out) = output.lock() {
-                    *out = Some(result);
-                }
-            });
-        match worker {
-            Ok(handle) => {
-                *self.ivars().scan.borrow_mut() = Some((handle, slot));
-                *self.ivars().poll_timer.borrow_mut() = Some(self.new_timer(0.1, sel!(pollScan:)));
+        match Job::spawn("hostwatch-processes", || {
+            platform::scan_processes(platform::RankBy::Footprint)
+        }) {
+            Ok(job) => {
+                *self.ivars().scan.borrow_mut() = Some(job);
+                self.poll_jobs();
             }
             Err(error) => self
                 .ivars()
@@ -98,34 +112,47 @@ impl Controller {
         }
     }
 
-    /// Takes a finished scan result; with `wait`, blocks until the worker ends (quit).
-    pub(super) fn collect_scan(&self, wait: bool) {
-        let finished = match self.ivars().scan.borrow().as_ref() {
-            Some((handle, slot)) => {
-                wait || handle.is_finished() || slot.lock().map_or(true, |s| s.is_some())
+    /// Starts the job poll timer unless it is already running.
+    pub(super) fn poll_jobs(&self) {
+        if self.ivars().poll_timer.borrow().is_none() {
+            *self.ivars().poll_timer.borrow_mut() = Some(self.new_timer(0.1, sel!(pollJobs:)));
+        }
+    }
+
+    /// Applies finished job results; with `wait`, blocks until every job ends (quit).
+    pub(super) fn collect_jobs(&self, wait: bool) {
+        let now = now_unix();
+        let mut changed = false;
+        let scan = take_if(&self.ivars().scan, wait);
+        if let Some(job) = scan {
+            let result = job
+                .finish()
+                .unwrap_or_else(|| Err("读取进程时出错，未得到结果".into()));
+            self.ivars()
+                .monitor
+                .borrow_mut()
+                .finish_processes(result, now);
+            changed = true;
+        }
+        let plan = take_if(&self.ivars().plan, wait);
+        if let Some(job) = plan {
+            let result = job
+                .finish()
+                .unwrap_or_else(|| Err("分析时出错，未得到结果".into()));
+            self.ivars()
+                .monitor
+                .borrow_mut()
+                .optimizer_mut()
+                .finish(result, now);
+            changed = true;
+        }
+        let idle = self.ivars().scan.borrow().is_none() && self.ivars().plan.borrow().is_none();
+        if idle {
+            if let Some(timer) = self.ivars().poll_timer.borrow_mut().take() {
+                timer.invalidate();
             }
-            None => false,
-        };
-        if !finished {
-            return;
         }
-        let Some((handle, slot)) = self.ivars().scan.borrow_mut().take() else {
-            return;
-        };
-        let _ = handle.join();
-        if let Some(timer) = self.ivars().poll_timer.borrow_mut().take() {
-            timer.invalidate();
-        }
-        let result = slot
-            .lock()
-            .ok()
-            .and_then(|mut s| s.take())
-            .unwrap_or_else(|| Err("读取进程时出错，未得到结果".into()));
-        self.ivars()
-            .monitor
-            .borrow_mut()
-            .finish_processes(result, now_unix());
-        if !wait {
+        if changed && !wait {
             self.render(false);
         }
     }
@@ -178,7 +205,7 @@ impl Controller {
                 timer.invalidate();
             }
         }
-        self.collect_scan(true);
+        self.collect_jobs(true);
         if let Some(popover) = self.ivars().popover.get() {
             popover.close();
         }

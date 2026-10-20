@@ -13,12 +13,10 @@ serde_json = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
-# Keep the collector compatible with the project's Rust 1.79 baseline.
-sysinfo = { version = "=0.30.13", default-features = false }
 # Native menu-bar shell (NSStatusItem); no WebView. objc2 0.6 / app-kit 0.3 build on Rust 1.79.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSObject", "NSString", "NSTimer", "NSDate", "NSRunLoop", "NSURL", "NSArray", "NSDictionary", "NSGeometry", "NSNotification", "NSValue", "NSAttributedString", "NSEnumerator"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSButtonCell", "NSActionCell", "NSControl", "NSView", "NSCell", "NSMenu", "NSMenuItem", "NSWorkspace", "NSPopover", "NSViewController", "NSTextField", "NSText", "NSFont", "NSFontDescriptor", "NSColor", "NSImage", "NSImageView", "NSImageCell", "NSBezierPath", "NSGraphics", "NSScrollView", "NSClipView", "NSScreen", "NSWindow", "NSAccessibility", "NSAccessibilityConstants", "NSAccessibilityProtocols", "NSAttributedString", "NSStringDrawing", "NSParagraphStyle", "NSUserInterfaceLayout", "NSLayoutConstraint", "NSAppearance", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSObject", "NSString", "NSTimer", "NSDate", "NSRunLoop", "NSURL", "NSArray", "NSDictionary", "NSGeometry", "NSNotification", "NSValue", "NSAttributedString", "NSEnumerator", "NSProcessInfo", "NSError"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSButtonCell", "NSActionCell", "NSControl", "NSView", "NSCell", "NSMenu", "NSMenuItem", "NSWorkspace", "NSPopover", "NSViewController", "NSTextField", "NSText", "NSFont", "NSFontDescriptor", "NSColor", "NSImage", "NSImageView", "NSImageCell", "NSBezierPath", "NSGraphics", "NSScrollView", "NSClipView", "NSScreen", "NSWindow", "NSAccessibility", "NSAccessibilityConstants", "NSAccessibilityProtocols", "NSAttributedString", "NSStringDrawing", "NSParagraphStyle", "NSUserInterfaceLayout", "NSLayoutConstraint", "NSAppearance", "libc", "objc2-core-foundation"] }
 
 [profile.release]
 lto = true
