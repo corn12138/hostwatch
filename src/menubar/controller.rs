@@ -26,6 +26,8 @@ pub(super) struct Ivars {
     pub(super) plan: RefCell<Option<PlanJob>>,
     /// Checks left before pending quit requests are reported as still running.
     pub(super) quit_checks: Cell<u32>,
+    /// Interface language, re-resolved whenever the popover opens.
+    pub(super) ui: Cell<Ui>,
 }
 
 define_class!(
@@ -140,6 +142,7 @@ impl Controller {
             scan: RefCell::new(None),
             plan: RefCell::new(None),
             quit_checks: Cell::new(0),
+            ui: Cell::new(prefs::current_ui(prefs::load_choice())),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -206,7 +209,8 @@ impl Controller {
     }
 
     pub(super) fn refresh_status(&self) {
-        let (tone, title) = panel::conclusion(&self.ivars().monitor.borrow(), now_unix());
+        let (tone, title) =
+            panel::conclusion(&self.ivars().monitor.borrow(), now_unix(), self.ui());
         let status = (tone, title);
         if self.ivars().status.borrow().as_ref() == Some(&status) {
             return;
@@ -225,7 +229,11 @@ impl Controller {
             Tone::Recovering => "circle.lefthalf.filled",
             Tone::Loading => "circle.dotted",
         };
-        let label = NSString::from_str(&format!("Hostwatch：{title}"));
+        let label = NSString::from_str(&tr!(
+            self.ui().lang,
+            format!("Hostwatch：{title}"),
+            format!("Hostwatch: {title}")
+        ));
         match NSImage::imageWithSystemSymbolName_accessibilityDescription(
             &NSString::from_str(name),
             Some(&label),
@@ -312,6 +320,10 @@ impl Controller {
         }
     }
 
+    pub(super) fn ui(&self) -> Ui {
+        self.ivars().ui.get()
+    }
+
     pub(super) fn shown(&self) -> bool {
         self.ivars().popover.get().is_some_and(|p| p.isShown())
     }
@@ -335,6 +347,12 @@ impl Controller {
             return;
         }
         *self.ivars().routes.borrow_mut() = vec![Route::Home];
+        // A system language change takes effect the next time the panel opens.
+        let ui = prefs::current_ui(self.ui().choice);
+        if ui != self.ui() {
+            self.ivars().ui.set(ui);
+            self.refresh_status();
+        }
         self.ivars().monitor.borrow_mut().clear_tool_feedback();
         self.render(true);
         let Some(button) = self.ivars().status_item.get().and_then(|i| i.button(mtm)) else {

@@ -27,22 +27,6 @@ pub enum Tool {
     StorageSettings,
 }
 
-impl Tool {
-    pub fn label(self) -> &'static str {
-        match self {
-            Tool::ActivityMonitor => "活动监视器",
-            Tool::StorageSettings => "“储存空间”设置",
-        }
-    }
-
-    pub fn manual_path(self) -> &'static str {
-        match self {
-            Tool::ActivityMonitor => "访达 › 应用程序 › 实用工具 › 活动监视器",
-            Tool::StorageSettings => "苹果菜单 › 系统设置 › 通用 › 储存空间",
-        }
-    }
-}
-
 /// Recorded evidence about time between samples. Only these explain a gap; a long timestamp
 /// difference on its own is shown as "no data", never as sleep.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -375,7 +359,7 @@ impl Monitor {
                 Mark::Interval(at, seconds) if at <= t => Some(seconds),
                 _ => None,
             })
-            .last()
+            .next_back()
             .unwrap_or(self.interval)
     }
 
@@ -393,7 +377,7 @@ impl Monitor {
     }
 }
 
-/// Rule-level measurements the newest sample could not judge. While rates are warming up, the
+/// Rules (by id) the newest sample could not judge. While rates are warming up, the
 /// rate-based rules are expected to be unknown and are reported as warmup instead.
 pub fn unmeasured(latest: &Latest) -> Vec<&'static str> {
     let rates_pending = latest.snapshot.activity.status != RateStatus::Ready;
@@ -402,13 +386,6 @@ pub fn unmeasured(latest: &Latest) -> Vec<&'static str> {
         .iter()
         .filter(|f| f.observation == Observation::Unknown)
         .filter(|f| !(rates_pending && matches!(f.id, "swap_activity" | "cpu_saturation")))
-        .map(|f| match f.id {
-            "memory_pressure" => "内存压力",
-            "swap_activity" => "交换读写",
-            "cpu_saturation" => "处理器使用率",
-            "disk_space" => "磁盘空间",
-            "thermal_state" => "散热状态",
-            other => other,
-        })
+        .map(|f| f.id)
         .collect()
 }

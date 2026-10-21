@@ -3,7 +3,7 @@
 
 use super::*;
 
-pub(crate) fn gap_label(monitor: &Monitor, a: u64, b: u64) -> Option<&'static str> {
+pub(crate) fn gap_label(lang: Lang, monitor: &Monitor, a: u64, b: u64) -> Option<&'static str> {
     let between = |m: &&Mark| match **m {
         Mark::Failed(t) | Mark::Paused(t) | Mark::Resumed(t) => a < t && t <= b,
         Mark::SleepGap(t) => t == b,
@@ -14,20 +14,21 @@ pub(crate) fn gap_label(monitor: &Monitor, a: u64, b: u64) -> Option<&'static st
         .iter()
         .any(|m| matches!(m, Mark::Paused(_) | Mark::Resumed(_)))
     {
-        return Some("暂停");
+        return Some(tr!(lang, "暂停", "paused"));
     }
     if marks.iter().any(|m| matches!(m, Mark::SleepGap(_))) {
-        return Some("睡眠");
+        return Some(tr!(lang, "睡眠", "sleep"));
     }
     if marks.iter().any(|m| matches!(m, Mark::Failed(_))) {
-        return Some("采集失败");
+        return Some(tr!(lang, "采集失败", "failed"));
     }
     let expected = monitor.interval_at(a).max(monitor.interval_at(b));
     // Timer tolerance is 10%; anything well beyond one cadence is missing data.
-    (b - a > expected * 3 / 2 + 2).then_some("无数据")
+    (b - a > expected * 3 / 2 + 2).then_some(tr!(lang, "无数据", "no data"))
 }
 
 pub(crate) fn series(
+    lang: Lang,
     monitor: &Monitor,
     value: impl Fn(&Sample) -> Option<f64>,
 ) -> (Vec<Vec<(u64, f64)>>, Vec<Gap>) {
@@ -38,7 +39,7 @@ pub(crate) fn series(
     for sample in monitor.history().samples() {
         let t = sample.unix_seconds;
         if let Some(a) = previous {
-            if let Some(label) = gap_label(monitor, a, t) {
+            if let Some(label) = gap_label(lang, monitor, a, t) {
                 gaps.push(Gap {
                     from: a,
                     to: t,
@@ -86,6 +87,7 @@ pub(crate) struct Spec<'a> {
 }
 
 pub(crate) fn chart(
+    lang: Lang,
     monitor: &Monitor,
     spec: Spec,
     y_max: f64,
@@ -93,7 +95,7 @@ pub(crate) fn chart(
     thresholds: Vec<(f64, String)>,
     value: impl Fn(&Sample) -> Option<f64>,
 ) -> Chart {
-    let (segments, gaps) = series(monitor, &value);
+    let (segments, gaps) = series(lang, monitor, &value);
     let samples = monitor.history().len();
     let points: Vec<(u64, f64)> = segments.iter().flatten().copied().collect();
     let t0 = monitor
@@ -109,35 +111,47 @@ pub(crate) fn chart(
     } else {
         Vec::new()
     };
-    let mut summary = format!("{}，", spec.title);
+    let mut summary = format!("{}{}", spec.title, tr!(lang, "，", ": "));
     let mut note = String::new();
     if let (Some(&(first, _)), Some(&(last, latest))) = (points.first(), points.last()) {
         let min = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
         let max = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
-        summary.push_str(&format!(
-            "{} 至 {}，最低 {}，最高 {}，最近 {}（{}）",
+        let (from, to, low, high, now) = (
             clock(first),
             clock(last),
             (spec.format)(min),
             (spec.format)(max),
             (spec.format)(latest),
-            clock(last)
+        );
+        summary.push_str(&tr!(
+            lang,
+            format!("{from} 至 {to}，最低 {low}，最高 {high}，最近 {now}（{to}）"),
+            format!("{from} to {to}, low {low}, high {high}, latest {now} ({to})")
         ));
         if !gaps.is_empty() {
             let list: Vec<String> = gaps
                 .iter()
                 .map(|g| format!("{}–{} {}", hm(g.from), hm(g.to), g.label))
                 .collect();
-            summary.push_str(&format!("；有 {} 段空白：{}", gaps.len(), list.join("，")));
+            let count = gaps.len();
+            summary.push_str(&tr!(
+                lang,
+                format!("；有 {count} 段空白：{}", list.join("，")),
+                format!("; {count} gap(s): {}", list.join(", "))
+            ));
         }
         note = if samples < 10 {
-            format!("历史不足：已有 {samples} 个样本（最多保留 120 个），只显示已有范围。")
+            tr!(
+                lang,
+                format!("历史不足：已有 {samples} 个样本（最多保留 120 个），只显示已有范围。"),
+                format!("Short history: {samples} sample(s) so far (up to 120 kept); only that range is shown.")
+            )
         } else {
-            format!(
-                "最近 {samples} 个样本，{}–{}（{}）。空白表示没有数据，不按 0 计算。",
-                hm(t0),
-                hm(t1),
-                span(t1 - t0)
+            let (start, end, length) = (hm(t0), hm(t1), span(lang, t1 - t0));
+            tr!(
+                lang,
+                format!("最近 {samples} 个样本，{start}–{end}（{length}）。空白表示没有数据，不按 0 计算。"),
+                format!("Last {samples} samples, {start}–{end} ({length}). Blank areas mean no data, not zero.")
             )
         };
     } else {
@@ -161,22 +175,39 @@ pub(crate) fn chart(
     }
 }
 
-pub(crate) fn rate_empty(monitor: &Monitor) -> &'static str {
+pub(crate) fn rate_empty(lang: Lang, monitor: &Monitor) -> &'static str {
     if monitor.history().len() < 2 {
-        "还没有历史数据：需要至少 2 个样本才能计算速率"
+        tr!(
+            lang,
+            "还没有历史数据：需要至少 2 个样本才能计算速率",
+            "No history yet: rates need at least 2 samples"
+        )
     } else {
-        "数据暂不可用（显示为未知，不是 0）"
+        unavailable(lang)
     }
 }
 
-pub fn cpu_chart(monitor: &Monitor) -> Chart {
+fn unavailable(lang: Lang) -> &'static str {
+    tr!(
+        lang,
+        "数据暂不可用（显示为未知，不是 0）",
+        "Data unavailable (shown as unknown, not zero)"
+    )
+}
+
+fn reading_first(lang: Lang) -> &'static str {
+    tr!(lang, "正在读取，还没有历史数据", "Reading; no history yet")
+}
+
+pub fn cpu_chart(lang: Lang, monitor: &Monitor) -> Chart {
     chart(
+        lang,
         monitor,
         Spec {
-            title: "处理器使用率",
+            title: tr!(lang, "处理器使用率", "Processor usage"),
             unit: "%",
             format: percent,
-            empty: rate_empty(monitor),
+            empty: rate_empty(lang, monitor),
             tone: Tone::Neutral,
         },
         100.0,
@@ -190,18 +221,19 @@ pub fn cpu_chart(monitor: &Monitor) -> Chart {
     )
 }
 
-pub fn memory_chart(monitor: &Monitor, total: u64) -> Chart {
+pub fn memory_chart(lang: Lang, monitor: &Monitor, total: u64) -> Chart {
     let total_gib = total as f64 / GIB as f64;
     chart(
+        lang,
         monitor,
         Spec {
-            title: "已用内存",
+            title: tr!(lang, "已用内存", "Memory used"),
             unit: "GiB",
             format: |v| format!("{v:.1} GiB"),
             empty: if monitor.history().len() == 0 {
-                "正在读取，还没有历史数据"
+                reading_first(lang)
             } else {
-                "数据暂不可用（显示为未知，不是 0）"
+                unavailable(lang)
             },
             tone: Tone::Neutral,
         },
@@ -212,7 +244,7 @@ pub fn memory_chart(monitor: &Monitor, total: u64) -> Chart {
     )
 }
 
-pub fn swap_chart(monitor: &Monitor) -> Chart {
+pub fn swap_chart(lang: Lang, monitor: &Monitor) -> Chart {
     let peak = monitor
         .history()
         .samples()
@@ -220,18 +252,22 @@ pub fn swap_chart(monitor: &Monitor) -> Chart {
         .fold(0.0, f64::max)
         / MIB;
     let y_max = nice_ceiling((peak * 1.2).max(2.0));
-    let thresholds = [(1.0, "1 需要注意"), (16.0, "16 严重")]
-        .into_iter()
-        .filter(|(v, _)| *v <= y_max)
-        .map(|(v, l)| (v, l.to_string()))
-        .collect();
+    let thresholds = [
+        (1.0, tr!(lang, "1 需要注意", "1 attention")),
+        (16.0, tr!(lang, "16 严重", "16 critical")),
+    ]
+    .into_iter()
+    .filter(|(v, _)| *v <= y_max)
+    .map(|(v, l)| (v, l.to_string()))
+    .collect();
     chart(
+        lang,
         monitor,
         Spec {
-            title: "交换读写合计",
+            title: tr!(lang, "交换读写合计", "Swap reads + writes"),
             unit: "MiB/s",
             format: |v| format!("{v:.1} MiB/s"),
-            empty: rate_empty(monitor),
+            empty: rate_empty(lang, monitor),
             tone: Tone::Neutral,
         },
         y_max,
@@ -241,7 +277,7 @@ pub fn swap_chart(monitor: &Monitor) -> Chart {
     )
 }
 
-pub fn temperature_chart(monitor: &Monitor) -> Chart {
+pub fn temperature_chart(lang: Lang, monitor: &Monitor) -> Chart {
     let peak = monitor
         .history()
         .samples()
@@ -253,15 +289,20 @@ pub fn temperature_chart(monitor: &Monitor) -> Chart {
         100.0
     };
     chart(
+        lang,
         monitor,
         Spec {
-            title: "芯片温度",
+            title: tr!(lang, "芯片温度", "Chip temperature"),
             unit: "°C",
             format: celsius_label,
             empty: if monitor.history().len() == 0 {
-                "正在读取，还没有历史数据"
+                reading_first(lang)
             } else {
-                "本机读不到芯片温度（显示为未知，不是 0）"
+                tr!(
+                    lang,
+                    "本机读不到芯片温度（显示为未知，不是 0）",
+                    "This Mac does not report chip temperature (unknown, not zero)"
+                )
             },
             tone: Tone::Neutral,
         },

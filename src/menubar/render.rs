@@ -26,12 +26,15 @@ impl Controller {
             };
             let (page, health) = {
                 let monitor = self.ivars().monitor.borrow();
-                (panel::page(&monitor, route, back, now), monitor.health(now))
+                (
+                    panel::page(&monitor, route, back, now, self.ui()),
+                    monitor.health(now),
+                )
             };
             let focused = self.focused_command(root);
             let same_route = self.ivars().rendered.get().map(|r| r.1) == Some(route);
             let offset = scroll.contentView().bounds().origin;
-            let kit = Kit::new(mtm, self);
+            let kit = Kit::new(mtm, self.ui().lang, self);
 
             let doc = Plain::new(mtm, rect(0.0, 0.0, WIDTH, 10.0));
             let mut y = 14.0;

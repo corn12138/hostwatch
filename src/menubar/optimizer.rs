@@ -92,12 +92,14 @@ impl Controller {
                 *self.ivars().plan.borrow_mut() = Some(job);
                 self.poll_jobs();
             }
-            Err(error) => self
-                .ivars()
-                .monitor
-                .borrow_mut()
-                .optimizer_mut()
-                .finish(Err(format!("无法开始分析：{error}")), now),
+            Err(error) => self.ivars().monitor.borrow_mut().optimizer_mut().finish(
+                Err(tr!(
+                    self.ui().lang,
+                    format!("无法开始分析：{error}"),
+                    format!("Could not start the analysis: {error}")
+                )),
+                now,
+            ),
         }
     }
 

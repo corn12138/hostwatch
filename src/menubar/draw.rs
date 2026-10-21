@@ -200,7 +200,7 @@ pub(super) fn draw_chart(chart: &Chart, compact: bool, w: f64, h: f64) {
             draw_text(label, left + pw - 2.0, y(*value) - 13.0, 10.0, &color, 2);
         }
     }
-    let line = if chart.title.starts_with("交换") {
+    let line = if chart.unit.starts_with("MiB/s") {
         NSColor::systemOrangeColor()
     } else {
         NSColor::systemBlueColor()

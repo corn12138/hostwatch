@@ -16,6 +16,7 @@ mod tests;
 
 use crate::advice::{GB, GIB, MIB};
 use crate::alerts::Sample;
+pub use crate::lang::{Lang, LanguageChoice, Ui};
 use crate::model::{Pressure, RateStatus, Severity, ThermalState};
 use crate::monitor::{
     unmeasured, ActiveRule, Current, Group, Health, Issue, Latest, Mark, Monitor, Processes,
@@ -26,6 +27,7 @@ use crate::optimize::{Focus, Optimization, QuitState};
 pub use chart::{cpu_chart, memory_chart, swap_chart, temperature_chart};
 use format::*;
 pub use format::{clock, interval_label, percent, rate, span};
+pub(crate) use format::{tool_label, tool_path};
 use reading::*;
 use summary::*;
 
@@ -50,18 +52,18 @@ pub enum Route {
 }
 
 impl Route {
-    pub fn title(self) -> &'static str {
+    pub fn title(self, lang: Lang) -> &'static str {
         match self {
-            Route::Home => "概览",
-            Route::Detail(Resource::Memory) => "内存",
-            Route::Detail(Resource::Cpu) => "处理器",
-            Route::Detail(Resource::Disk) => "磁盘空间",
-            Route::Detail(Resource::Thermal) => "温度",
-            Route::Optimize(_) => "一键优化",
-            Route::Issues => "问题列表",
-            Route::Handling(_) => "处理方法",
-            Route::Processes => "进程排行",
-            Route::Settings => "设置",
+            Route::Home => tr!(lang, "概览", "Overview"),
+            Route::Detail(Resource::Memory) => tr!(lang, "内存", "Memory"),
+            Route::Detail(Resource::Cpu) => tr!(lang, "处理器", "Processor"),
+            Route::Detail(Resource::Disk) => tr!(lang, "磁盘空间", "Disk space"),
+            Route::Detail(Resource::Thermal) => tr!(lang, "温度", "Temperature"),
+            Route::Optimize(_) => tr!(lang, "一键优化", "Optimize"),
+            Route::Issues => tr!(lang, "问题列表", "Issues"),
+            Route::Handling(_) => tr!(lang, "处理方法", "What to do"),
+            Route::Processes => tr!(lang, "进程排行", "Processes"),
+            Route::Settings => tr!(lang, "设置", "Settings"),
         }
     }
 }
@@ -88,16 +90,16 @@ impl Tone {
     }
 
     /// Spoken/visible name of the status shape, so state never depends on color alone.
-    pub fn label(self) -> &'static str {
+    pub fn label(self, lang: Lang) -> &'static str {
         match self {
-            Tone::Ok => "正常",
-            Tone::Warning => "需要注意",
-            Tone::Critical => "严重",
-            Tone::Unknown => "未知",
-            Tone::Paused => "已暂停",
-            Tone::Recovering => "正在确认恢复",
-            Tone::Loading => "正在读取",
-            Tone::Neutral => "提示",
+            Tone::Ok => tr!(lang, "正常", "Normal"),
+            Tone::Warning => tr!(lang, "需要注意", "Needs attention"),
+            Tone::Critical => tr!(lang, "严重", "Critical"),
+            Tone::Unknown => tr!(lang, "未知", "Unknown"),
+            Tone::Paused => tr!(lang, "已暂停", "Paused"),
+            Tone::Recovering => tr!(lang, "正在确认恢复", "Confirming recovery"),
+            Tone::Loading => tr!(lang, "正在读取", "Reading"),
+            Tone::Neutral => tr!(lang, "提示", "Note"),
         }
     }
 }
@@ -118,6 +120,7 @@ pub enum Command {
     ToggleApp(u32),
     /// Ask the selected apps to quit normally.
     QuitSelected,
+    SetLanguage(LanguageChoice),
     More,
     Quit,
 }
@@ -256,6 +259,8 @@ pub enum Block {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Footer {
+    /// Monitoring is paused, so the pause button resumes.
+    pub paused: bool,
     pub pause: Button,
     pub interval: Button,
 }
@@ -266,27 +271,32 @@ pub struct Page {
     pub footer: Footer,
 }
 
-pub fn page(monitor: &Monitor, route: Route, back: Option<Route>, now: u64) -> Page {
+pub fn page(monitor: &Monitor, route: Route, back: Option<Route>, now: u64, ui: Ui) -> Page {
     let view = View {
         monitor,
         health: monitor.health(now),
         issues: monitor.issues(),
+        lang: ui.lang,
+        ui,
     };
+    let lang = ui.lang;
     let mut blocks = Vec::new();
     if let Some(back) = back {
         blocks.push(Block::Header {
-            back: back.title().into(),
+            back: back.title(lang).into(),
             title: match route {
-                Route::Processes => "占用内存最多的进程".into(),
-                Route::Settings => "设置与数据说明".into(),
-                Route::Issues => "需要注意的问题".into(),
+                Route::Processes => tr!(lang, "占用内存最多的进程", "Top memory users").into(),
+                Route::Settings => tr!(lang, "设置与数据说明", "Settings and data notes").into(),
+                Route::Issues => tr!(lang, "需要注意的问题", "Issues needing attention").into(),
                 Route::Handling(group) => view
                     .issues
                     .iter()
                     .find(|i| i.group == group)
-                    .map_or("处理方法", issue_title)
+                    .map_or(tr!(lang, "处理方法", "What to do"), |i| {
+                        issue_title(lang, i)
+                    })
                     .into(),
-                other => other.title().into(),
+                other => other.title(lang).into(),
             },
             badge: badge(&view, route),
         });
@@ -303,19 +313,22 @@ pub fn page(monitor: &Monitor, route: Route, back: Option<Route>, now: u64) -> P
         Route::Processes => pages::processes(&view, &mut blocks),
         Route::Settings => pages::settings(&view, &mut blocks),
     }
+    let every = interval_label(lang, monitor.interval());
     Page {
         blocks,
         footer: Footer {
+            paused: monitor.paused(),
             pause: Button::new(
-                if monitor.paused() {
-                    "继续采集"
-                } else {
-                    "暂停采集"
+                match (monitor.paused(), lang) {
+                    (true, Lang::Zh) => "继续采集",
+                    (false, Lang::Zh) => "暂停采集",
+                    (true, Lang::En) => "Resume",
+                    (false, Lang::En) => "Pause",
                 },
                 Command::TogglePause,
             ),
             interval: Button::new(
-                format!("每 {}采样", interval_label(monitor.interval())),
+                tr!(lang, format!("每 {every}采样"), format!("Every {every}")),
                 Command::Go(Route::Settings),
             ),
         },
@@ -333,9 +346,15 @@ fn badge(view: &View, route: Route) -> Option<(Tone, String)> {
         }
         Route::Handling(group) => view.issues.iter().find(|i| i.group == group).map(|i| {
             if matches!(i.recovery, Recovery::Confirming { .. }) {
-                (Tone::Recovering, "正在确认恢复".to_string())
+                (
+                    Tone::Recovering,
+                    tr!(view.lang, "正在确认恢复", "Confirming recovery").to_string(),
+                )
             } else {
-                (Tone::of(i.severity), severity_word(i.severity).to_string())
+                (
+                    Tone::of(i.severity),
+                    severity_word(view.lang, i.severity).to_string(),
+                )
             }
         }),
         _ => None,
@@ -343,11 +362,13 @@ fn badge(view: &View, route: Route) -> Option<(Tone, String)> {
 }
 
 /// One plain sentence for the status item, the home title and accessibility.
-pub fn conclusion(monitor: &Monitor, now: u64) -> (Tone, String) {
+pub fn conclusion(monitor: &Monitor, now: u64, ui: Ui) -> (Tone, String) {
     let view = View {
         monitor,
         health: monitor.health(now),
         issues: monitor.issues(),
+        lang: ui.lang,
+        ui,
     };
     let (tone, title, _) = headline(&view);
     (tone, title)

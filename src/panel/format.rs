@@ -35,25 +35,35 @@ pub(crate) fn hm(t: u64) -> String {
     clock(t)[..5].to_string()
 }
 
-pub fn span(seconds: u64) -> String {
+pub fn span(lang: Lang, seconds: u64) -> String {
+    let minutes = (seconds + 30) / 60;
     if seconds < 60 {
-        format!("{seconds} 秒")
+        tr!(lang, format!("{seconds} 秒"), format!("{seconds} s"))
     } else if seconds < 3600 {
-        format!("约 {} 分钟", (seconds + 30) / 60)
+        tr!(
+            lang,
+            format!("约 {minutes} 分钟"),
+            format!("about {minutes} min")
+        )
     } else {
-        let minutes = (seconds + 30) / 60;
-        match minutes % 60 {
-            0 => format!("约 {} 小时", minutes / 60),
-            m => format!("约 {} 小时 {m} 分钟", minutes / 60),
+        let (hours, rest) = (minutes / 60, minutes % 60);
+        match rest {
+            0 => tr!(lang, format!("约 {hours} 小时"), format!("about {hours} h")),
+            m => tr!(
+                lang,
+                format!("约 {hours} 小时 {m} 分钟"),
+                format!("about {hours} h {m} min")
+            ),
         }
     }
 }
 
-pub fn interval_label(seconds: u64) -> String {
+pub fn interval_label(lang: Lang, seconds: u64) -> String {
     if seconds < 60 || seconds % 60 != 0 {
-        format!("{seconds} 秒")
+        tr!(lang, format!("{seconds} 秒"), format!("{seconds} s"))
     } else {
-        format!("{} 分钟", seconds / 60)
+        let minutes = seconds / 60;
+        tr!(lang, format!("{minutes} 分钟"), format!("{minutes} min"))
     }
 }
 
@@ -70,13 +80,13 @@ pub(crate) fn celsius_label(celsius: f64) -> String {
     format!("{celsius:.0}°C")
 }
 
-pub(crate) fn thermal_label(state: Option<ThermalState>) -> &'static str {
+pub(crate) fn thermal_label(lang: Lang, state: Option<ThermalState>) -> &'static str {
     match state {
-        Some(ThermalState::Nominal) => "正常",
-        Some(ThermalState::Fair) => "偏热",
-        Some(ThermalState::Serious) => "偏高",
-        Some(ThermalState::Critical) => "严重",
-        None => "未知",
+        Some(ThermalState::Nominal) => tr!(lang, "正常", "Normal"),
+        Some(ThermalState::Fair) => tr!(lang, "偏热", "Warm"),
+        Some(ThermalState::Serious) => tr!(lang, "偏高", "Hot"),
+        Some(ThermalState::Critical) => tr!(lang, "严重", "Critical"),
+        None => tr!(lang, "未知", "Unknown"),
     }
 }
 
@@ -96,41 +106,63 @@ pub fn rate(bytes_per_second: f64) -> String {
     format!("{:.1} MiB/s", bytes_per_second / MIB)
 }
 
-pub(crate) fn pressure_label(pressure: Pressure) -> &'static str {
+pub(crate) fn pressure_label(lang: Lang, pressure: Pressure) -> &'static str {
     match pressure {
-        Pressure::Normal => "正常",
-        Pressure::Warning => "偏高",
-        Pressure::Critical => "严重",
-        Pressure::Unknown => "未知",
+        Pressure::Normal => tr!(lang, "正常", "Normal"),
+        Pressure::Warning => tr!(lang, "偏高", "Elevated"),
+        Pressure::Critical => tr!(lang, "严重", "Critical"),
+        Pressure::Unknown => tr!(lang, "未知", "Unknown"),
     }
 }
 
-pub(crate) fn severity_word(severity: Severity) -> &'static str {
+pub(crate) fn severity_word(lang: Lang, severity: Severity) -> &'static str {
     if severity >= Severity::Critical {
-        "严重"
+        tr!(lang, "严重", "Critical")
     } else {
-        "需要注意"
+        tr!(lang, "需要注意", "Needs attention")
     }
 }
 
-pub(crate) fn rule_name(id: &str) -> &'static str {
+pub(crate) fn rule_name(lang: Lang, id: &str) -> &'static str {
     match id {
-        "memory_pressure" => "内存压力",
-        "swap_activity" => "交换读写",
-        "cpu_saturation" => "处理器使用率",
-        "disk_space" => "磁盘空间",
-        "thermal_state" => "散热",
-        _ => "检查项",
+        "memory_pressure" => tr!(lang, "内存压力", "Memory pressure"),
+        "swap_activity" => tr!(lang, "交换读写", "Swap activity"),
+        "cpu_saturation" => tr!(lang, "处理器使用率", "Processor usage"),
+        "disk_space" => tr!(lang, "磁盘空间", "Disk space"),
+        "thermal_state" => tr!(lang, "散热", "Cooling"),
+        _ => tr!(lang, "检查项", "Check"),
+    }
+}
+
+pub(crate) fn tool_label(lang: Lang, tool: Tool) -> &'static str {
+    match tool {
+        Tool::ActivityMonitor => tr!(lang, "活动监视器", "Activity Monitor"),
+        Tool::StorageSettings => tr!(lang, "“储存空间”设置", "Storage settings"),
+    }
+}
+
+pub(crate) fn tool_path(lang: Lang, tool: Tool) -> &'static str {
+    match tool {
+        Tool::ActivityMonitor => tr!(
+            lang,
+            "访达 › 应用程序 › 实用工具 › 活动监视器",
+            "Finder › Applications › Utilities › Activity Monitor"
+        ),
+        Tool::StorageSettings => tr!(
+            lang,
+            "苹果菜单 › 系统设置 › 通用 › 储存空间",
+            "Apple menu › System Settings › General › Storage"
+        ),
     }
 }
 
 /// Process names are external data: drop control characters and bound the width.
-pub(crate) fn display_name(name: &str) -> String {
+pub(crate) fn display_name(lang: Lang, name: &str) -> String {
     let clean: String = name.chars().filter(|c| !c.is_control()).collect();
     if clean.chars().count() > 32 {
         clean.chars().take(31).chain(['…']).collect()
     } else if clean.is_empty() {
-        "（无名称）".into()
+        tr!(lang, "（无名称）", "(no name)").into()
     } else {
         clean
     }

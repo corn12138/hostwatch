@@ -132,7 +132,7 @@ fn partial_sources_are_not_reported_healthy() {
     });
     monitor.record(Ok(s), 0);
     assert_eq!(monitor.health(0), Health::Partial);
-    assert_eq!(unmeasured(monitor.current().unwrap()), ["内存压力"]);
+    assert_eq!(unmeasured(monitor.current().unwrap()), ["memory_pressure"]);
 }
 
 #[test]

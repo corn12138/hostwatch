@@ -1,57 +1,92 @@
 use super::*;
 
+fn open_activity_monitor(lang: Lang) -> Button {
+    Button::new(
+        open_tool_title(lang, Tool::ActivityMonitor),
+        Command::Open(Tool::ActivityMonitor),
+    )
+}
+
 pub(crate) fn memory_detail(view: &View, blocks: &mut Vec<Block>) {
-    let monitor = view.monitor;
+    let (lang, monitor) = (view.lang, view.monitor);
     let latest = shown(view).map(|(l, _)| l);
     let memory = latest.map(|l| &l.snapshot.memory);
     let breakdown = memory.and_then(|m| m.breakdown.as_ref());
     blocks.push(match (breakdown, memory) {
-        (Some(b), Some(m)) => Block::Big {
-            value: gib(b.used_bytes),
-            unit: format!("/ {} GiB 已用", gib(m.total_bytes)),
-        },
+        (Some(b), Some(m)) => {
+            let total = gib(m.total_bytes);
+            Block::Big {
+                value: gib(b.used_bytes),
+                unit: tr!(
+                    lang,
+                    format!("/ {total} GiB 已用"),
+                    format!("/ {total} GiB used")
+                ),
+            }
+        }
         _ => Block::Big {
             value: "—".into(),
-            unit: "已用内存未知".into(),
+            unit: tr!(lang, "已用内存未知", "Memory used unknown").into(),
         },
     });
     blocks.push(Block::Text(
-        "“已用”= 应用内存 + 联动内存 + 压缩内存，不含可随时回收的文件缓存。已用多本身很正常；真正要看的是系统给出的“内存压力”和持续的交换读写。压力只有正常 / 偏高 / 严重三个等级，不是百分比。"
-            .into(),
+        tr!(
+            lang,
+            "“已用”= 应用内存 + 联动内存 + 压缩内存，不含可随时回收的文件缓存。已用多本身很正常；真正要看的是系统给出的“内存压力”和持续的交换读写。压力只有正常 / 偏高 / 严重三个等级，不是百分比。",
+            "“Used” = app memory + wired memory + compressed memory, not counting file cache that can be reclaimed at any time. High use alone is normal; what matters is macOS's “memory pressure” and sustained swapping. Pressure has three levels (normal / elevated / critical), not a percentage."
+        )
+        .into(),
     ));
     let total = memory
         .map(|m| m.total_bytes)
         .or_else(|| monitor.latest().map(|l| l.snapshot.memory.total_bytes));
     if let Some(total) = total {
-        blocks.push(Block::Graphic(Graphic::Chart(memory_chart(monitor, total))));
+        blocks.push(Block::Graphic(Graphic::Chart(memory_chart(
+            lang, monitor, total,
+        ))));
     }
-    let mut swap = swap_chart(monitor);
-    swap.unit = "MiB/s · ≥ 1 需要注意 · ≥ 16 严重".into();
+    let mut swap = swap_chart(lang, monitor);
+    swap.unit = tr!(
+        lang,
+        "MiB/s · ≥ 1 需要注意 · ≥ 16 严重",
+        "MiB/s · ≥ 1 attention · ≥ 16 critical"
+    )
+    .into();
     blocks.push(Block::Graphic(Graphic::Chart(swap)));
-    let unknown = || "未知".to_string();
+    let unknown = || tr!(lang, "未知", "Unknown").to_string();
+    let label = |zh: &str, en: &str| tr!(lang, zh, en).to_string();
     let mut facts = vec![(
-        "内存压力（系统等级）".to_string(),
-        memory.map_or_else(unknown, |m| pressure_label(m.pressure).into()),
+        label("内存压力（系统等级）", "Memory pressure (system level)"),
+        memory.map_or_else(unknown, |m| pressure_label(lang, m.pressure).into()),
     )];
     match breakdown {
         Some(b) => facts.extend([
-            ("应用内存".into(), format!("{} GiB", gib(b.app_bytes))),
-            ("联动内存".into(), format!("{} GiB", gib(b.wired_bytes))),
             (
-                "压缩内存".into(),
+                label("应用内存", "App memory"),
+                format!("{} GiB", gib(b.app_bytes)),
+            ),
+            (
+                label("联动内存", "Wired memory"),
+                format!("{} GiB", gib(b.wired_bytes)),
+            ),
+            (
+                label("压缩内存", "Compressed"),
                 format!("{} GiB", gib(b.compressed_bytes)),
             ),
             (
-                "文件缓存（不计入已用）".into(),
+                label(
+                    "文件缓存（不计入已用）",
+                    "Cached files (not counted as used)",
+                ),
                 format!("{} GiB", gib(b.cached_files_bytes)),
             ),
-            ("空闲".into(), format!("{} GiB", gib(b.free_bytes))),
+            (label("空闲", "Free"), format!("{} GiB", gib(b.free_bytes))),
         ]),
-        None => facts.push(("内存分项".into(), unknown())),
+        None => facts.push((label("内存分项", "Memory breakdown"), unknown())),
     }
     let activity = latest.map(|l| &l.snapshot.activity);
     facts.push((
-        "交换读取 / 写入".into(),
+        label("交换读取 / 写入", "Swap reads / writes"),
         match activity {
             Some(a) if a.status == RateStatus::Ready => {
                 match (a.swap_in_bytes_per_second, a.swap_out_bytes_per_second) {
@@ -59,59 +94,78 @@ pub(crate) fn memory_detail(view: &View, blocks: &mut Vec<Block>) {
                     _ => unknown(),
                 }
             }
-            Some(_) => "正在建立基线".into(),
+            Some(_) => label("正在建立基线", "Building baseline"),
             None => unknown(),
         },
     ));
     facts.push((
-        "交换文件已用".into(),
+        label("交换文件已用", "Swap file used"),
         memory
             .and_then(|m| m.swap.as_ref())
             .map_or_else(unknown, |s| format!("{} GiB", gib(s.used_bytes))),
     ));
     blocks.push(Block::Facts(facts));
-    let mut buttons = vec![Button::new(
-        "打开活动监视器",
-        Command::Open(Tool::ActivityMonitor),
-    )];
+    let mut buttons = vec![open_activity_monitor(lang)];
     related_issue(view, Group::Memory, &mut buttons);
     blocks.push(Block::Buttons(buttons));
     tool_feedback(view, Tool::ActivityMonitor, blocks);
     blocks.push(Block::Note(
-        "与活动监视器“内存”页口径相同：“已使用的内存”= 应用内存 + 联动内存 + 被压缩内存。活动监视器按 1024 进制计算但标作 GB，数值可直接对照。"
-            .into(),
+        tr!(
+            lang,
+            "与活动监视器“内存”页口径相同：“已使用的内存”= 应用内存 + 联动内存 + 被压缩内存。活动监视器按 1024 进制计算但标作 GB，数值可直接对照。",
+            "Same definition as Activity Monitor's Memory tab: “Memory Used” = App Memory + Wired Memory + Compressed. Activity Monitor counts in base 1024 but labels it GB, so the numbers match directly."
+        )
+        .into(),
     ));
     blocks.push(Block::Note(freshness_note(
         view,
-        "系统内存统计、交换计数器、内核内存压力等级",
+        tr!(
+            lang,
+            "系统内存统计、交换计数器、内核内存压力等级",
+            "system memory statistics, swap counters, kernel memory pressure level"
+        ),
     )));
 }
 
 pub(crate) fn cpu_detail(view: &View, blocks: &mut Vec<Block>) {
-    let monitor = view.monitor;
+    let (lang, monitor) = (view.lang, view.monitor);
     let activity = shown(view).map(|(l, _)| &l.snapshot.activity);
     blocks.push(match activity {
         Some(a) if a.status == RateStatus::Ready && a.cpu_busy_percent.is_some() => Block::Big {
             value: format!("{:.0}", a.cpu_busy_percent.unwrap_or(0.0)),
-            unit: "% 使用率".into(),
+            unit: tr!(lang, "% 使用率", "% in use").into(),
         },
         Some(a) if a.status != RateStatus::Ready && a.status != RateStatus::Unavailable => {
             Block::Big {
                 value: "—".into(),
-                unit: "正在建立基线，需要再采样一次".into(),
+                unit: tr!(
+                    lang,
+                    "正在建立基线，需要再采样一次",
+                    "Building baseline; needs one more sample"
+                )
+                .into(),
             }
         }
         _ => Block::Big {
             value: "—".into(),
-            unit: "使用率未知".into(),
+            unit: tr!(lang, "使用率未知", "Usage unknown").into(),
         },
     });
     blocks.push(Block::Text(
-        "处理器使用率是两次采样之间所有核心平均有多忙。短时间升高很正常，连续 2 个样本 ≥ 90% 才会提示。Hostwatch 不提供按进程的处理器排行。"
-            .into(),
+        tr!(
+            lang,
+            "处理器使用率是两次采样之间所有核心平均有多忙。短时间升高很正常，连续 2 个样本 ≥ 90% 才会提示。Hostwatch 不提供按进程的处理器排行。",
+            "Processor usage is how busy all cores were on average between two samples. Short spikes are normal; Hostwatch alerts only after 2 samples in a row at ≥ 90%. It does not rank processes by CPU."
+        )
+        .into(),
     ));
-    let mut chart = cpu_chart(monitor);
-    chart.unit = "% · 虚线 90 为提示线".into();
+    let mut chart = cpu_chart(lang, monitor);
+    chart.unit = tr!(
+        lang,
+        "% · 虚线 90 为提示线",
+        "% · dashed line at 90 is the alert level"
+    )
+    .into();
     let peak = chart
         .segments
         .iter()
@@ -119,29 +173,44 @@ pub(crate) fn cpu_detail(view: &View, blocks: &mut Vec<Block>) {
         .map(|p| p.1)
         .fold(None, |a: Option<f64>, v| Some(a.map_or(v, |a| a.max(v))));
     blocks.push(Block::Graphic(Graphic::Chart(chart)));
+    let label = |zh: &str, en: &str| tr!(lang, zh, en).to_string();
     blocks.push(Block::Facts(vec![
-        ("图表范围内最高".into(), peak.map_or("—".into(), percent)),
-        ("提示条件".into(), "≥ 90%，连续 2 个样本".into()),
-        ("按进程查看".into(), "请用活动监视器的“CPU”页".into()),
+        (
+            label("图表范围内最高", "Highest in chart"),
+            peak.map_or("—".into(), percent),
+        ),
+        (
+            label("提示条件", "Alert when"),
+            rule_rule(lang, "cpu_saturation").into(),
+        ),
+        (
+            label("按进程查看", "Per process"),
+            label("请用活动监视器的“CPU”页", "Use Activity Monitor's CPU tab"),
+        ),
     ]));
-    let mut buttons = vec![Button::new(
-        "打开活动监视器",
-        Command::Open(Tool::ActivityMonitor),
-    )];
+    let mut buttons = vec![open_activity_monitor(lang)];
     related_issue(view, Group::Cpu, &mut buttons);
     blocks.push(Block::Buttons(buttons));
     tool_feedback(view, Tool::ActivityMonitor, blocks);
-    blocks.push(Block::Note(format!(
-        "这是两次采样之间（每 {}）的平均值；活动监视器底部的“系统 + 用户”按它自己的更短间隔计算，所以两边会有起伏差异。",
-        interval_label(view.monitor.interval())
+    let every = interval_label(lang, monitor.interval());
+    blocks.push(Block::Note(tr!(
+        lang,
+        format!("这是两次采样之间（每 {every}）的平均值；活动监视器底部的“系统 + 用户”按它自己的更短间隔计算，所以两边会有起伏差异。"),
+        format!("This is the average between two samples (every {every}); Activity Monitor's “System + User” uses its own shorter interval, so the two can differ from moment to moment.")
     )));
     blocks.push(Block::Note(freshness_note(
         view,
-        "系统处理器负载计数（两次采样之差）",
+        tr!(
+            lang,
+            "系统处理器负载计数（两次采样之差）",
+            "system processor load counters (difference between two samples)"
+        ),
     )));
 }
 
 pub(crate) fn disk_detail(view: &View, blocks: &mut Vec<Block>) {
+    let lang = view.lang;
+    let label = |zh: &str, en: &str| tr!(lang, zh, en).to_string();
     let disk = shown(view).and_then(|(l, _)| l.snapshot.disk.as_ref());
     match disk {
         Some(d) => {
@@ -150,57 +219,77 @@ pub(crate) fn disk_detail(view: &View, blocks: &mut Vec<Block>) {
             let fraction = used as f64 / d.total_bytes as f64;
             blocks.push(Block::Big {
                 value: format!("{:.1}", available as f64 / GB as f64),
-                unit: "GB 可用".into(),
+                unit: tr!(lang, "GB 可用", "GB free").into(),
             });
             blocks.push(Block::Text(
-                "这是启动磁盘（Data 卷）还剩多少空间，和“储存空间”设置、访达一样包含 macOS 需要时会自动清掉的缓存。空间太少时，系统更新、保存文件和交换都会受影响。这里只显示容量，不显示读写速度或磁盘健康。"
-                    .into(),
+                tr!(
+                    lang,
+                    "这是启动磁盘（Data 卷）还剩多少空间，和“储存空间”设置、访达一样包含 macOS 需要时会自动清掉的缓存。空间太少时，系统更新、保存文件和交换都会受影响。这里只显示容量，不显示读写速度或磁盘健康。",
+                    "Free space on the startup disk (Data volume). Like Storage settings and Finder, it includes caches macOS clears by itself when space is needed. Too little space affects system updates, saving files and swap. Only capacity is shown, not disk speed or health."
+                )
+                .into(),
             ));
             let tone = match issue_for(view, Group::Disk) {
                 Some(issue) => Tone::of(issue.severity),
                 None => Tone::Neutral,
             };
+            let (used_share, free_share) = (fraction * 100.0, 100.0 - fraction * 100.0);
             blocks.push(Block::Graphic(Graphic::Bar {
                 fraction,
                 tone,
-                label: format!(
-                    "已用 {:.0}%，可用 {:.1}%",
-                    fraction * 100.0,
-                    100.0 - fraction * 100.0
+                label: tr!(
+                    lang,
+                    format!("已用 {used_share:.0}%，可用 {free_share:.1}%"),
+                    format!("{used_share:.0}% used, {free_share:.1}% free")
                 ),
             }));
-            let mut facts = vec![("可用".to_string(), gb(available))];
+            let mut facts = vec![(label("可用", "Free"), gb(available))];
             if d.important_available_bytes.is_some() {
-                facts.push(("其中可立即写入".into(), gb(d.available_bytes)));
                 facts.push((
-                    "其中系统可自动释放".into(),
+                    label("其中可立即写入", "Writable right now"),
+                    gb(d.available_bytes),
+                ));
+                facts.push((
+                    label("其中系统可自动释放", "macOS can free by itself"),
                     gb(available - d.available_bytes),
                 ));
             }
             facts.extend([
-                ("已用".into(), gb(used)),
-                ("总容量".into(), gb(d.total_bytes)),
-                ("卷".into(), d.path.clone()),
-                ("提示条件".into(), rule_rule("disk_space").into()),
+                (label("已用", "Used"), gb(used)),
+                (label("总容量", "Capacity"), gb(d.total_bytes)),
+                (label("卷", "Volume"), d.path.clone()),
+                (
+                    label("提示条件", "Alert when"),
+                    rule_rule(lang, "disk_space").into(),
+                ),
             ]);
             blocks.push(Block::Facts(facts));
         }
         None => {
             blocks.push(Block::Big {
                 value: "—".into(),
-                unit: "可用空间未知".into(),
+                unit: tr!(lang, "可用空间未知", "Free space unknown").into(),
             });
             blocks.push(Block::Text(
-                "目前读不到启动磁盘的容量，显示为“未知”，不代表空间充足。".into(),
+                tr!(
+                    lang,
+                    "目前读不到启动磁盘的容量，显示为“未知”，不代表空间充足。",
+                    "The startup disk's capacity cannot be read right now. “Unknown” does not mean there is enough space."
+                )
+                .into(),
             ));
         }
     }
     blocks.push(Block::Note(
-        "按 1 GB = 10 亿字节计算，与“储存空间”设置一致。可自动释放的部分每 10 分钟向系统查询一次；只显示当前值，不保留容量历史。"
-            .into(),
+        tr!(
+            lang,
+            "按 1 GB = 10 亿字节计算，与“储存空间”设置一致。可自动释放的部分每 10 分钟向系统查询一次；只显示当前值，不保留容量历史。",
+            "1 GB = 1,000,000,000 bytes, as in Storage settings. The amount macOS can free is asked every 10 minutes; only current values are shown, no capacity history."
+        )
+        .into(),
     ));
     let mut buttons = vec![Button::new(
-        "打开“储存空间”设置",
+        open_tool_title(lang, Tool::StorageSettings),
         Command::Open(Tool::StorageSettings),
     )];
     related_issue(view, Group::Disk, &mut buttons);
@@ -208,71 +297,96 @@ pub(crate) fn disk_detail(view: &View, blocks: &mut Vec<Block>) {
     tool_feedback(view, Tool::StorageSettings, blocks);
     blocks.push(Block::Note(freshness_note(
         view,
-        "文件系统容量统计（statfs）、系统可清除空间",
+        tr!(
+            lang,
+            "文件系统容量统计（statfs）、系统可清除空间",
+            "file system capacity (statfs), purgeable space from macOS"
+        ),
     )));
 }
 
 pub(crate) fn thermal_detail(view: &View, blocks: &mut Vec<Block>) {
+    let (lang, monitor) = (view.lang, view.monitor);
     let thermal = shown(view).and_then(|(l, _)| l.snapshot.thermal.as_ref());
     blocks.push(match thermal {
-        Some(t) => match t.cpu_celsius {
-            Some(celsius) => Block::Big {
-                value: format!("{celsius:.0}"),
-                unit: format!("°C 芯片平均 · 散热{}", thermal_label(t.state)),
-            },
-            None => Block::Big {
-                value: thermal_label(t.state).into(),
-                unit: "系统散热等级".into(),
-            },
-        },
+        Some(t) => {
+            let level = thermal_label(lang, t.state);
+            match t.cpu_celsius {
+                Some(celsius) => Block::Big {
+                    value: format!("{celsius:.0}"),
+                    unit: tr!(
+                        lang,
+                        format!("°C 芯片平均 · 散热{level}"),
+                        format!("°C chip average · cooling {level}")
+                    ),
+                },
+                None => Block::Big {
+                    value: level.into(),
+                    unit: tr!(lang, "系统散热等级", "System cooling level").into(),
+                },
+            }
+        }
         None => Block::Big {
             value: "—".into(),
-            unit: "散热状态未知".into(),
+            unit: tr!(lang, "散热状态未知", "Cooling state unknown").into(),
         },
     });
     blocks.push(Block::Text(
-        "芯片温度会随负载快速升降，几十度到八九十度都可能是正常的。真正影响速度的是 macOS 给出的散热等级：等级偏高时，系统会主动降低处理器速度来保护硬件。"
-            .into(),
+        tr!(
+            lang,
+            "芯片温度会随负载快速升降，几十度到八九十度都可能是正常的。真正影响速度的是 macOS 给出的散热等级：等级偏高时，系统会主动降低处理器速度来保护硬件。",
+            "Chip temperature rises and falls quickly with load; anything from the 40s to the high 80s °C can be normal. What affects speed is macOS's cooling level: when it is high, macOS slows the processor to protect the hardware."
+        )
+        .into(),
     ));
     if thermal.map_or(true, |t| t.cpu_celsius.is_some()) {
         blocks.push(Block::Graphic(Graphic::Chart(temperature_chart(
-            view.monitor,
+            lang, monitor,
         ))));
     }
-    let unknown = || "未知".to_string();
+    let unknown = || tr!(lang, "未知", "Unknown").to_string();
+    let label = |zh: &str, en: &str| tr!(lang, zh, en).to_string();
     blocks.push(Block::Facts(vec![
         (
-            "系统散热等级".into(),
-            thermal.map_or_else(unknown, |t| thermal_label(t.state).into()),
+            label("系统散热等级", "System cooling level"),
+            thermal.map_or_else(unknown, |t| thermal_label(lang, t.state).into()),
         ),
         (
-            "芯片最高".into(),
+            label("芯片最高", "Hottest chip sensor"),
             thermal
                 .and_then(|t| t.cpu_max_celsius)
                 .map_or_else(unknown, celsius_label),
         ),
         (
-            "电池".into(),
+            label("电池", "Battery"),
             thermal
                 .and_then(|t| t.battery_celsius)
                 .map_or_else(unknown, celsius_label),
         ),
-        ("提示条件".into(), rule_rule("thermal_state").into()),
+        (
+            label("提示条件", "Alert when"),
+            rule_rule(lang, "thermal_state").into(),
+        ),
     ]));
-    let mut buttons = vec![Button::new(
-        "打开活动监视器",
-        Command::Open(Tool::ActivityMonitor),
-    )];
+    let mut buttons = vec![open_activity_monitor(lang)];
     if issue_for(view, Group::Thermal).is_some() {
         buttons.insert(
             0,
-            Button::new("一键优化", Command::Optimize(Group::Thermal)).primary(),
+            Button::new(
+                tr!(lang, "一键优化", "Optimize"),
+                Command::Optimize(Group::Thermal),
+            )
+            .primary(),
         );
     }
     blocks.push(Block::Buttons(buttons));
     tool_feedback(view, Tool::ActivityMonitor, blocks);
     blocks.push(Block::Note(freshness_note(
         view,
-        "macOS 散热等级（公开接口）；温度来自芯片传感器（非公开接口，系统更新后可能读不到）",
+        tr!(
+            lang,
+            "macOS 散热等级（公开接口）；温度来自芯片传感器（非公开接口，系统更新后可能读不到）",
+            "macOS cooling level (public API); temperatures come from chip sensors (private interface that may stop working after a macOS update)"
+        ),
     )));
 }

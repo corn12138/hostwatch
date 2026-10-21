@@ -63,7 +63,7 @@ impl Controller {
                 }
             }
             Command::Open(tool) => {
-                let result = open_tool(tool);
+                let result = open_tool(self.ui().lang, tool);
                 self.ivars()
                     .monitor
                     .borrow_mut()
@@ -86,6 +86,11 @@ impl Controller {
                 .optimizer_mut()
                 .toggle(pid),
             Command::QuitSelected => self.quit_selected(now),
+            Command::SetLanguage(choice) => {
+                prefs::save_choice(choice);
+                self.ivars().ui.set(prefs::current_ui(choice));
+                self.refresh_status();
+            }
             Command::More => {
                 self.show_more();
                 return;
@@ -109,11 +114,14 @@ impl Controller {
                 *self.ivars().scan.borrow_mut() = Some(job);
                 self.poll_jobs();
             }
-            Err(error) => self
-                .ivars()
-                .monitor
-                .borrow_mut()
-                .finish_processes(Err(format!("无法启动读取：{error}")), now),
+            Err(error) => self.ivars().monitor.borrow_mut().finish_processes(
+                Err(tr!(
+                    self.ui().lang,
+                    format!("无法启动读取：{error}"),
+                    format!("Could not start reading: {error}")
+                )),
+                now,
+            ),
         }
     }
 
@@ -130,9 +138,14 @@ impl Controller {
         let mut changed = false;
         let scan = take_if(&self.ivars().scan, wait);
         if let Some(job) = scan {
-            let result = job
-                .finish()
-                .unwrap_or_else(|| Err("读取进程时出错，未得到结果".into()));
+            let result = job.finish().unwrap_or_else(|| {
+                Err(tr!(
+                    self.ui().lang,
+                    "读取进程时出错，未得到结果",
+                    "Reading processes failed without a result"
+                )
+                .into())
+            });
             self.ivars()
                 .monitor
                 .borrow_mut()
@@ -141,9 +154,14 @@ impl Controller {
         }
         let plan = take_if(&self.ivars().plan, wait);
         if let Some(job) = plan {
-            let result = job
-                .finish()
-                .unwrap_or_else(|| Err("分析时出错，未得到结果".into()));
+            let result = job.finish().unwrap_or_else(|| {
+                Err(tr!(
+                    self.ui().lang,
+                    "分析时出错，未得到结果",
+                    "The analysis failed without a result"
+                )
+                .into())
+            });
             self.ivars()
                 .monitor
                 .borrow_mut()
@@ -164,16 +182,29 @@ impl Controller {
 
     pub(super) fn show_more(&self) {
         let mtm = self.mtm();
+        let lang = self.ui().lang;
         let Some(button) = self.ivars().more_button.borrow().clone() else {
             return;
         };
         let menu = NSMenu::new(mtm);
         menu.setAutoenablesItems(false);
         for (title, tag, key) in [
-            ("进程内存排行", MENU_PROCESSES, ""),
-            ("设置与数据说明", MENU_SETTINGS, ","),
+            (
+                tr!(lang, "进程内存排行", "Top memory users"),
+                MENU_PROCESSES,
+                "",
+            ),
+            (
+                tr!(lang, "设置与数据说明", "Settings and data notes"),
+                MENU_SETTINGS,
+                ",",
+            ),
             ("", 0, ""),
-            ("退出 Hostwatch", MENU_QUIT, "q"),
+            (
+                tr!(lang, "退出 Hostwatch", "Quit Hostwatch"),
+                MENU_QUIT,
+                "q",
+            ),
         ] {
             if tag == 0 {
                 menu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -222,23 +253,34 @@ impl Controller {
 }
 
 /// particular pane is visible or a problem is fixed.
-pub(super) fn open_tool(tool: Tool) -> Result<(), String> {
+pub(super) fn open_tool(lang: Lang, tool: Tool) -> Result<(), String> {
     let workspace = NSWorkspace::sharedWorkspace();
     let url = match tool {
         Tool::ActivityMonitor => workspace
             .URLForApplicationWithBundleIdentifier(ns_string!("com.apple.ActivityMonitor"))
-            .ok_or("未找到活动监视器（com.apple.ActivityMonitor）")?,
+            .ok_or(tr!(
+                lang,
+                "未找到活动监视器（com.apple.ActivityMonitor）",
+                "Activity Monitor (com.apple.ActivityMonitor) was not found"
+            ))?,
         Tool::StorageSettings => {
-            NSURL::URLWithString(ns_string!(STORAGE_SETTINGS_URL)).ok_or("储存空间设置地址无效")?
+            NSURL::URLWithString(ns_string!(STORAGE_SETTINGS_URL)).ok_or(tr!(
+                lang,
+                "储存空间设置地址无效",
+                "The Storage settings address is invalid"
+            ))?
         }
     };
     if workspace.openURL(&url) {
         Ok(())
     } else {
-        Err(format!(
-            "系统未能打开 {}",
-            url.absoluteString()
-                .map_or_else(String::new, |s| s.to_string())
+        let address = url
+            .absoluteString()
+            .map_or_else(String::new, |s| s.to_string());
+        Err(tr!(
+            lang,
+            format!("系统未能打开 {address}"),
+            format!("macOS could not open {address}")
         ))
     }
 }

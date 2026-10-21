@@ -1,3 +1,6 @@
+#[cfg(any(target_os = "macos", test))]
+#[macro_use]
+mod lang;
 mod activity;
 mod advice;
 mod alerts;

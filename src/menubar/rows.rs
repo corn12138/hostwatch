@@ -13,6 +13,27 @@ impl Kit<'_> {
             Shape::Card(None),
             rect(PAD, y, w, ROW * rows.len() as f64),
         );
+        // The name column fits the widest name, so longer English names are not truncated.
+        let name_column = rows
+            .iter()
+            .filter_map(|row| match row {
+                Block::Resource { name, .. } => Some(name),
+                _ => None,
+            })
+            .map(|name| {
+                let (field, _) = self.label(
+                    name,
+                    13.0,
+                    unsafe { NSFontWeightSemibold },
+                    &NSColor::labelColor(),
+                    200.0,
+                    false,
+                );
+                field.sizeThatFits(NSSize::new(200.0, 40.0)).width.ceil()
+            })
+            .fold(60.0f64, f64::max)
+            .min(120.0);
+        let value_x = 12.0 + name_column + 12.0;
         for (i, row) in rows.iter().enumerate() {
             let Block::Resource {
                 resource,
@@ -46,10 +67,17 @@ impl Kit<'_> {
                 13.0,
                 unsafe { NSFontWeightSemibold },
                 &primary,
-                72.0,
+                name_column,
                 false,
             );
-            self.put(&content, &name_field, 12.0, (ROW - nh) / 2.0, 72.0, nh);
+            self.put(
+                &content,
+                &name_field,
+                12.0,
+                (ROW - nh) / 2.0,
+                name_column,
+                nh,
+            );
             let (value_field, vh) = self.label(
                 value,
                 15.0,
@@ -70,25 +98,12 @@ impl Kit<'_> {
             self.put(
                 &content,
                 &value_field,
-                84.0,
+                value_x,
                 (ROW - vh) / 2.0,
                 value_width,
                 vh,
             );
-            let gx = 84.0 + value_width + 10.0;
-            match graphic {
-                Some(g @ Graphic::Spark(_)) => {
-                    let view = self.graphic_view(g, rect(gx, (ROW - 24.0) / 2.0, 96.0, 24.0));
-                    view.setAccessibilityElement(false);
-                    content.addSubview(&view);
-                }
-                Some(g @ Graphic::Bar { .. }) => {
-                    let view = self.graphic_view(g, rect(gx, (ROW - 6.0) / 2.0, 80.0, 6.0));
-                    view.setAccessibilityElement(false);
-                    content.addSubview(&view);
-                }
-                _ => {}
-            }
+            let gx = value_x + value_width + 10.0;
             let (status_field, sh) = self.label(
                 status,
                 12.0,
@@ -109,6 +124,18 @@ impl Kit<'_> {
             let sx = w - 24.0 - sw;
             self.put(&content, &status_field, sx, (ROW - sh) / 2.0, sw, sh);
             self.icon(&content, *tone, sx - 17.0, (ROW - 14.0) / 2.0, 12.0);
+            // Trends and bars use only the room left before the status, and are skipped without it.
+            let room = sx - 17.0 - 10.0 - gx;
+            let small = match graphic {
+                Some(g @ Graphic::Spark(_)) => Some((g, room.min(96.0), 24.0)),
+                Some(g @ Graphic::Bar { .. }) => Some((g, room.min(80.0), 6.0)),
+                _ => None,
+            };
+            if let Some((g, width, height)) = small.filter(|s| s.1 >= 32.0) {
+                let view = self.graphic_view(g, rect(gx, (ROW - height) / 2.0, width, height));
+                view.setAccessibilityElement(false);
+                content.addSubview(&view);
+            }
             let (chevron, ch) = self.label(
                 "›",
                 15.0,
@@ -227,8 +254,7 @@ impl Kit<'_> {
             control.sizeToFit();
         };
         let pause = self.button(&footer.pause);
-        let paused =
-            footer.pause.command == Command::TogglePause && footer.pause.title.starts_with("继续");
+        let paused = footer.paused;
         if let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
             &NSString::from_str(if paused { "play.fill" } else { "pause.fill" }),
             None,
@@ -252,7 +278,7 @@ impl Kit<'_> {
             20.0,
         );
         let more = self.button(&Button {
-            title: "更多".into(),
+            title: tr!(self.lang, "更多", "More").into(),
             command: Command::More,
             primary: false,
             enabled: true,

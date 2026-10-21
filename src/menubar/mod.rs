@@ -20,6 +20,7 @@ mod draw;
 mod jobs;
 mod kit;
 mod optimizer;
+mod prefs;
 mod render;
 mod rows;
 mod views;
@@ -50,6 +51,7 @@ use objc2_foundation::{
     NSSize, NSString, NSTimer, NSURL,
 };
 
+use crate::lang::{Lang, LanguageChoice, Ui};
 use crate::model::ProcessScan;
 use crate::monitor::{Group, Health, Monitor, Tool};
 use crate::optimize::{self, Candidate, QuitOutcome, QuitState, RunningApp};

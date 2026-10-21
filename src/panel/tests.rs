@@ -1,4 +1,15 @@
 use super::*;
+
+const ZH: Ui = Ui {
+    lang: Lang::Zh,
+    choice: LanguageChoice::Zh,
+    system: Lang::Zh,
+};
+const EN: Ui = Ui {
+    lang: Lang::En,
+    choice: LanguageChoice::System,
+    system: Lang::En,
+};
 use crate::advice::tests::{ready, snapshot};
 use crate::model::{Process, ProcessScan, SourceStatus};
 use crate::monitor::tests::{at, normal};
@@ -95,7 +106,7 @@ fn resource(page: &Page, which: Resource) -> (&str, &str, Tone, bool) {
 }
 
 fn home(monitor: &Monitor, now: u64) -> Page {
-    page(monitor, Route::Home, None, now)
+    page(monitor, Route::Home, None, now, ZH)
 }
 
 #[test]
@@ -122,7 +133,7 @@ fn chart_endpoint_and_summary_match_displayed_value() {
     }
     let page = home(&monitor, 10);
     let (value, ..) = resource(&page, Resource::Cpu);
-    let chart = cpu_chart(&monitor);
+    let chart = cpu_chart(Lang::Zh, &monitor);
     let last = *chart.segments.last().unwrap().last().unwrap();
     assert_eq!((last.0, percent(last.1)), (10, value.to_string()));
     assert!(chart.summary.contains(&format!("最近 {value}")));
@@ -132,16 +143,16 @@ fn chart_endpoint_and_summary_match_displayed_value() {
 }
 
 fn page_for(monitor: &Monitor, route: Route) -> Page {
-    page(
-        monitor,
-        route,
-        Some(Route::Home),
-        monitor
-            .history()
-            .samples()
-            .last()
-            .map_or(0, |s| s.unix_seconds),
-    )
+    page_in(monitor, route, ZH)
+}
+
+fn page_in(monitor: &Monitor, route: Route, ui: Ui) -> Page {
+    let now = monitor
+        .history()
+        .samples()
+        .last()
+        .map_or(0, |s| s.unix_seconds);
+    page(monitor, route, Some(Route::Home), now, ui)
 }
 
 #[test]
@@ -154,7 +165,7 @@ fn history_uses_timestamps_across_interval_changes_and_gaps() {
     for t in [65, 70] {
         monitor.record(Ok(normal(t)), t);
     }
-    let chart = cpu_chart(&monitor);
+    let chart = cpu_chart(Lang::Zh, &monitor);
     let times: Vec<u64> = chart.segments.iter().flatten().map(|p| p.0).collect();
     assert_eq!(
         times,
@@ -176,10 +187,14 @@ fn history_uses_timestamps_across_interval_changes_and_gaps() {
     let mut woke = normal(5000);
     woke.activity = crate::activity::empty(RateStatus::SleepGap);
     monitor.record(Ok(woke), 5000);
-    let labels: Vec<&str> = cpu_chart(&monitor).gaps.iter().map(|g| g.label).collect();
+    let labels: Vec<&str> = cpu_chart(Lang::Zh, &monitor)
+        .gaps
+        .iter()
+        .map(|g| g.label)
+        .collect();
     assert_eq!(labels, ["无数据", "采集失败", "暂停", "睡眠"]);
     // The sleep sample has no CPU rate: absent, not zero, and the line is not joined across.
-    let chart = cpu_chart(&monitor);
+    let chart = cpu_chart(Lang::Zh, &monitor);
     assert!(chart.segments.iter().flatten().all(|p| p.0 != 5000));
     assert!(chart
         .segments
@@ -196,7 +211,7 @@ fn missing_values_are_absent_not_zero() {
     let page = home(&monitor, 0);
     let (value, status, tone, _) = resource(&page, Resource::Cpu);
     assert_eq!((value, status, tone), ("—", "正在建立基线", Tone::Loading));
-    let swap = swap_chart(&monitor);
+    let swap = swap_chart(Lang::Zh, &monitor);
     assert!(swap.segments.is_empty());
     assert!(swap.empty.unwrap().contains("至少 2 个样本"));
     let mut s = normal(30);
@@ -216,13 +231,13 @@ fn swap_axis_fits_real_values_beyond_demo_range() {
         s.activity = ready(80.0 * MIB, 10.0);
         monitor.record(Ok(s), t);
     }
-    let chart = swap_chart(&monitor);
+    let chart = swap_chart(Lang::Zh, &monitor);
     assert!(chart.y_max >= 80.0);
     assert!(chart.thresholds.iter().any(|t| t.0 == 16.0));
     let mut quiet = Monitor::new(5);
     quiet.record(Ok(normal(0)), 0);
-    assert_eq!(swap_chart(&quiet).y_max, 2.0);
-    assert_eq!(swap_chart(&quiet).thresholds.len(), 1);
+    assert_eq!(swap_chart(Lang::Zh, &quiet).y_max, 2.0);
+    assert_eq!(swap_chart(Lang::Zh, &quiet).thresholds.len(), 1);
 }
 
 #[test]
@@ -433,18 +448,20 @@ fn memory_copy_matches_collector_definition() {
     assert!(has(&detail, "10.0 / 16.0 GiB 已用"));
     assert!(has(&detail, "不含可随时回收的文件缓存"));
     assert!(has(&detail, "文件缓存（不计入已用）：5.0 GiB"));
-    let chart = memory_chart(&monitor, 16 * GIB);
+    let chart = memory_chart(Lang::Zh, &monitor, 16 * GIB);
     assert_eq!(chart.segments[0][0].1, 10.0);
 }
 
 #[test]
 fn clock_and_span_formatting() {
     assert_eq!(clock(0).len(), 8);
-    assert_eq!(span(45), "45 秒");
-    assert_eq!(span(600), "约 10 分钟");
-    assert_eq!(span(3900), "约 1 小时 5 分钟");
-    assert_eq!(interval_label(300), "5 分钟");
-    assert_eq!(interval_label(90), "90 秒");
+    assert_eq!(span(Lang::Zh, 45), "45 秒");
+    assert_eq!(span(Lang::Zh, 600), "约 10 分钟");
+    assert_eq!(span(Lang::Zh, 3900), "约 1 小时 5 分钟");
+    assert_eq!(span(Lang::En, 3900), "about 1 h 5 min");
+    assert_eq!(interval_label(Lang::Zh, 300), "5 分钟");
+    assert_eq!(interval_label(Lang::Zh, 90), "90 秒");
+    assert_eq!(interval_label(Lang::En, 300), "5 min");
 }
 
 #[test]
@@ -476,7 +493,7 @@ fn temperature_row_detail_and_alert() {
     let detail = page_for(&monitor, Route::Detail(Resource::Thermal));
     assert!(has(&detail, "45 °C 芯片平均 · 散热正常"));
     assert!(has(&detail, "芯片最高：48°C"));
-    let chart = temperature_chart(&monitor);
+    let chart = temperature_chart(Lang::Zh, &monitor);
     assert_eq!(chart.segments[0][0], (0, 45.0));
 
     // macOS's own level drives the alert; warning needs two samples like other rules.
@@ -612,4 +629,261 @@ fn temperature_without_sensors_falls_back_to_the_system_level() {
             .any(|b| matches!(b, Block::Graphic(Graphic::Chart(_)))),
         "no empty temperature chart without sensors"
     );
+}
+
+fn has_chinese(text: &str) -> bool {
+    text.chars()
+        .any(|c| ('\u{3000}'..='\u{9fff}').contains(&c) || ('\u{ff00}'..='\u{ffef}').contains(&c))
+}
+
+/// Every visible string of a page, including footer and chart text.
+fn all_text(page: &Page) -> Vec<String> {
+    // `texts` joins facts with a Chinese colon for the Chinese tests; read facts directly here.
+    let without_facts = Page {
+        blocks: page
+            .blocks
+            .iter()
+            .filter(|b| !matches!(b, Block::Facts(_)))
+            .cloned()
+            .collect(),
+        footer: page.footer.clone(),
+    };
+    let mut out = texts(&without_facts);
+    for block in &page.blocks {
+        if let Block::Facts(facts) = block {
+            out.extend(facts.iter().flat_map(|(k, v)| [k.clone(), v.clone()]));
+        }
+    }
+    out.extend([
+        page.footer.pause.title.clone(),
+        page.footer.interval.title.clone(),
+    ]);
+    for block in &page.blocks {
+        let graphic = match block {
+            Block::Graphic(g) => Some(g),
+            Block::Resource {
+                graphic: Some(g), ..
+            } => Some(g),
+            _ => None,
+        };
+        match graphic {
+            Some(Graphic::Chart(c) | Graphic::Spark(c)) => {
+                out.extend([
+                    c.title.clone(),
+                    c.unit.clone(),
+                    c.summary.clone(),
+                    c.note.clone(),
+                ]);
+                out.extend(c.empty.iter().cloned());
+                out.extend(c.gaps.iter().map(|g| g.label.to_string()));
+                out.extend(c.thresholds.iter().map(|t| t.1.clone()));
+            }
+            Some(Graphic::Bar { label, .. }) => out.push(label.clone()),
+            None => {}
+        }
+        if let Block::Header { back, .. } = block {
+            out.push(back.clone());
+        }
+    }
+    out
+}
+
+fn every_route() -> Vec<Route> {
+    let mut routes = vec![
+        Route::Home,
+        Route::Issues,
+        Route::Processes,
+        Route::Settings,
+    ];
+    for resource in [
+        Resource::Memory,
+        Resource::Cpu,
+        Resource::Disk,
+        Resource::Thermal,
+    ] {
+        routes.push(Route::Detail(resource));
+    }
+    for group in Group::ALL {
+        routes.push(Route::Handling(group));
+        routes.push(Route::Optimize(group));
+    }
+    routes
+}
+
+fn assert_english(monitor: &Monitor, context: &str) {
+    for route in every_route() {
+        let page = page_in(monitor, route, EN);
+        for text in all_text(&page) {
+            let allowed = text == "中文" || text == "Language · 语言";
+            assert!(
+                allowed || !has_chinese(&text),
+                "{context} {route:?}: {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn english_pages_contain_no_chinese_in_any_state() {
+    use crate::optimize::{Candidate, QuitOutcome};
+    // Normal, with a gap and a pause in the history.
+    let mut monitor = Monitor::new(30);
+    for t in [0, 30, 200] {
+        monitor.record(Ok(normal(t)), t);
+    }
+    monitor.set_paused(true, 201);
+    monitor.set_paused(false, 260);
+    monitor.record(Ok(normal(260)), 260);
+    assert_english(&monitor, "normal");
+
+    // Every issue group at once, with optimizer results and tool feedback.
+    let mut monitor = Monitor::new(30);
+    for t in [0, 30] {
+        let mut s = at(snapshot(Pressure::Warning, 4 * GIB), t);
+        s.activity = ready(20.0 * MIB, 95.0);
+        s.thermal.as_mut().unwrap().state = Some(ThermalState::Serious);
+        monitor.record(Ok(s), t);
+    }
+    monitor.note_open(Tool::ActivityMonitor, Err("x".into()), 31);
+    monitor.begin_processes(31);
+    monitor.finish_processes(
+        Ok(ProcessScan {
+            top: vec![Process {
+                pid: 1,
+                name: String::new(),
+                resident_bytes: GIB,
+                footprint_bytes: Some(GIB),
+            }],
+            listed: 9,
+            unreadable: 8,
+        }),
+        32,
+    );
+    monitor.optimizer_mut().begin(Group::Memory, 32);
+    monitor.optimizer_mut().finish(
+        Ok(vec![Candidate {
+            pid: 5,
+            name: "Browser".into(),
+            bundle_id: None,
+            footprint_bytes: 2 * GIB,
+            cpu_percent: 40.0,
+            processes: 3,
+            active: true,
+            selected: true,
+        }]),
+        33,
+    );
+    assert_english(&monitor, "issues");
+    monitor.optimizer_mut().applied(
+        vec![QuitOutcome {
+            pid: 5,
+            name: "Browser".into(),
+            state: QuitState::StillRunning,
+        }],
+        34,
+    );
+    assert_english(&monitor, "applied");
+
+    // Recovering, then failed and stale.
+    monitor.record(Ok(normal(60)), 60);
+    assert_english(&monitor, "recovering");
+    monitor.record(Err("read error".into()), 90);
+    assert_english(&monitor, "failed");
+    let mut stale = Monitor::new(30);
+    stale.record(Ok(normal(0)), 0);
+    assert!(texts(&page(&stale, Route::Home, None, 500, EN))
+        .iter()
+        .any(|t| t == "Data is out of date"));
+}
+
+#[test]
+fn english_copy_reads_naturally() {
+    let mut monitor = Monitor::new(30);
+    monitor.record(Ok(normal(0)), 0);
+    monitor.record(Ok(normal(30)), 30);
+    let home = page(&monitor, Route::Home, None, 30, EN);
+    assert!(has(&home, "Nothing needs attention"));
+    assert_eq!(home.footer.interval.title, "Every 30 s");
+    assert_eq!(home.footer.pause.title, "Pause");
+    let rows: Vec<&str> = home
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Resource { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rows, ["Memory", "Processor", "Disk space", "Temperature"]);
+
+    let mut monitor = Monitor::new(30);
+    for t in [0, 30] {
+        let mut s = at(snapshot(Pressure::Warning, 300 * GIB), t);
+        s.activity = ready(20.0 * MIB, 20.0);
+        monitor.record(Ok(s), t);
+    }
+    let home = page(&monitor, Route::Home, None, 30, EN);
+    assert!(has(&home, "Memory is running low; the Mac may slow down"));
+    assert!(has(
+        &home,
+        "Swap activity: swap reads + writes 20.0 MiB/s (now, sampled"
+    ));
+    let buttons: Vec<String> = home
+        .blocks
+        .iter()
+        .flat_map(|b| match b {
+            Block::Card { buttons, .. } => buttons.iter().map(|b| b.title.clone()).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert_eq!(buttons, ["Optimize", "What to do"]);
+}
+
+#[test]
+fn settings_offer_language_choices_in_their_own_language() {
+    let monitor = Monitor::new(30);
+    let ui = Ui::new(LanguageChoice::System, &["zh-Hans-CN".to_string()]);
+    let settings = page_in(&monitor, Route::Settings, ui);
+    let choices: Vec<(String, bool, Command)> = settings
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Choices(c)
+                if c.iter()
+                    .any(|b| matches!(b.command, Command::SetLanguage(_))) =>
+            {
+                Some(
+                    c.iter()
+                        .map(|b| (b.title.clone(), b.primary, b.command.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            }
+            _ => None,
+        })
+        .next()
+        .unwrap();
+    assert_eq!(
+        choices,
+        [
+            (
+                "跟随系统（中文）".to_string(),
+                true,
+                Command::SetLanguage(LanguageChoice::System)
+            ),
+            (
+                "中文".to_string(),
+                false,
+                Command::SetLanguage(LanguageChoice::Zh)
+            ),
+            (
+                "English".to_string(),
+                false,
+                Command::SetLanguage(LanguageChoice::En)
+            ),
+        ]
+    );
+    // A manual English choice on a Chinese system: English page, system still named.
+    let ui = Ui::new(LanguageChoice::En, &["zh-Hans-CN".to_string()]);
+    let settings = page_in(&monitor, Route::Settings, ui);
+    assert!(has(&settings, "Follow system (中文)"));
+    assert!(has(&settings, "Quit Hostwatch"));
 }

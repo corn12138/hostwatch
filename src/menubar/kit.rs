@@ -6,6 +6,7 @@ use super::*;
 /// tag is its command's index + 1.
 pub(super) struct Kit<'a> {
     pub(super) mtm: MainThreadMarker,
+    pub(super) lang: Lang,
     pub(super) target: &'a AnyObject,
     pub(super) commands: RefCell<Vec<Command>>,
     pub(super) more: RefCell<Option<Retained<NSButton>>>,
@@ -13,9 +14,10 @@ pub(super) struct Kit<'a> {
 
 impl<'a> Kit<'a> {
     /// `target` receives `perform:` from every control the kit creates.
-    pub(super) fn new(mtm: MainThreadMarker, target: &'a AnyObject) -> Self {
+    pub(super) fn new(mtm: MainThreadMarker, lang: Lang, target: &'a AnyObject) -> Self {
         Self {
             mtm,
+            lang,
             target,
             commands: RefCell::new(Vec::new()),
             more: RefCell::new(None),
@@ -85,7 +87,7 @@ impl<'a> Kit<'a> {
         let mtm = self.mtm;
         let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
             &NSString::from_str(symbol(tone)),
-            Some(&NSString::from_str(tone.label())),
+            Some(&NSString::from_str(tone.label(self.lang))),
         ) else {
             return;
         };
