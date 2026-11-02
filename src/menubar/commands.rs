@@ -91,6 +91,25 @@ impl Controller {
                 self.ivars().ui.set(prefs::current_ui(choice));
                 self.refresh_status();
             }
+            Command::SetNotifications(on) => {
+                prefs::save_notifications(on);
+                self.ivars()
+                    .monitor
+                    .borrow_mut()
+                    .integrations_mut()
+                    .notifications = on;
+                if let (true, Some(notifier)) = (on, self.ivars().notifier.get()) {
+                    notifier.authorize();
+                }
+            }
+            Command::SetOpenAtLogin(on) => {
+                let error = notify::set_login_item(on).err();
+                self.ivars()
+                    .monitor
+                    .borrow_mut()
+                    .integrations_mut()
+                    .login_error = error;
+            }
             Command::More => {
                 self.show_more();
                 return;
@@ -270,6 +289,18 @@ pub(super) fn open_tool(lang: Lang, tool: Tool) -> Result<(), String> {
                 "The Storage settings address is invalid"
             ))?
         }
+        Tool::NotificationSettings => NSURL::URLWithString(ns_string!(NOTIFICATION_SETTINGS_URL))
+            .ok_or(tr!(
+            lang,
+            "通知设置地址无效",
+            "The Notifications settings address is invalid"
+        ))?,
+        Tool::LoginItemSettings => NSURL::URLWithString(ns_string!(LOGIN_ITEM_SETTINGS_URL))
+            .ok_or(tr!(
+                lang,
+                "登录项设置地址无效",
+                "The Login Items settings address is invalid"
+            ))?,
     };
     if workspace.openURL(&url) {
         Ok(())
@@ -288,3 +319,9 @@ pub(super) fn open_tool(lang: Lang, tool: Tool) -> Result<(), String> {
 /// System Settings → General → Storage (macOS 13+).
 pub(super) const STORAGE_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.settings.Storage";
+/// System Settings → Notifications → Hostwatch (macOS 13+).
+pub(super) const NOTIFICATION_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=io.github.corn12138.hostwatch";
+/// System Settings → General → Login Items (macOS 13+).
+pub(super) const LOGIN_ITEM_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.LoginItems-Settings.extension";

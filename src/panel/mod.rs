@@ -8,6 +8,7 @@
 
 mod chart;
 mod format;
+mod notices;
 mod pages;
 mod reading;
 mod summary;
@@ -19,8 +20,8 @@ use crate::alerts::Sample;
 pub use crate::lang::{Lang, LanguageChoice, Ui};
 use crate::model::{Pressure, RateStatus, Severity, ThermalState};
 use crate::monitor::{
-    unmeasured, ActiveRule, Current, Group, Health, Issue, Latest, Mark, Monitor, Processes,
-    Recovery, Tool, INTERVAL_PRESETS,
+    unmeasured, ActiveRule, Current, Group, Health, Issue, Latest, LoginItem, Mark, Monitor,
+    NoticeAccess, Processes, Recovery, Tool, INTERVAL_PRESETS,
 };
 use crate::optimize::{Focus, Optimization, QuitState};
 
@@ -28,6 +29,7 @@ pub use chart::{cpu_chart, memory_chart, swap_chart, temperature_chart};
 use format::*;
 pub use format::{clock, interval_label, percent, rate, span};
 pub(crate) use format::{tool_label, tool_path};
+pub use notices::{notices, Notice};
 use reading::*;
 use summary::*;
 
@@ -121,6 +123,8 @@ pub enum Command {
     /// Ask the selected apps to quit normally.
     QuitSelected,
     SetLanguage(LanguageChoice),
+    SetNotifications(bool),
+    SetOpenAtLogin(bool),
     More,
     Quit,
 }

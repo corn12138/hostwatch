@@ -1,9 +1,11 @@
-//! The language preference, stored in the app's user defaults, and the system's languages.
+//! Language and notification preferences, stored in the app's user defaults, and the system's
+//! languages.
 
 use super::*;
 use objc2_foundation::{NSLocale, NSUserDefaults};
 
 const LANGUAGE_KEY: &str = "language";
+const NOTIFICATIONS_KEY: &str = "notifications";
 
 pub(super) fn load_choice() -> LanguageChoice {
     autoreleasepool(|_| {
@@ -22,6 +24,22 @@ pub(super) fn save_choice(choice: LanguageChoice) {
             NSUserDefaults::standardUserDefaults()
                 .setObject_forKey(Some(&value), &NSString::from_str(LANGUAGE_KEY))
         };
+    });
+}
+
+/// Notifications are on unless the person turned them off.
+pub(super) fn load_notifications() -> bool {
+    autoreleasepool(|_| {
+        let defaults = NSUserDefaults::standardUserDefaults();
+        let key = NSString::from_str(NOTIFICATIONS_KEY);
+        defaults.objectForKey(&key).is_none() || defaults.boolForKey(&key)
+    })
+}
+
+pub(super) fn save_notifications(on: bool) {
+    autoreleasepool(|_| {
+        NSUserDefaults::standardUserDefaults()
+            .setBool_forKey(on, &NSString::from_str(NOTIFICATIONS_KEY))
     });
 }
 

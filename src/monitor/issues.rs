@@ -27,6 +27,25 @@ impl Group {
         }
     }
 
+    /// The group a rule belongs to.
+    pub fn of_rule(id: &str) -> Option<Group> {
+        Group::ALL.into_iter().find(|g| g.rules().contains(&id))
+    }
+
+    /// Stable name, used to tag notifications.
+    pub fn key(self) -> &'static str {
+        match self {
+            Group::Memory => "memory",
+            Group::Cpu => "cpu",
+            Group::Disk => "disk",
+            Group::Thermal => "thermal",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Group> {
+        Group::ALL.into_iter().find(|g| g.key() == key)
+    }
+
     pub fn tool(self) -> Tool {
         match self {
             Group::Disk => Tool::StorageSettings,

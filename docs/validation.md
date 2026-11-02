@@ -181,6 +181,21 @@ release 构建，`--interval 5`（比默认 30 秒更密，作为上限情形）
 
 移除 sysinfo 依赖；release 二进制 755 KB。RSS ≤ 40 MiB 目标仍未满足，足迹预算仍待确认。
 
+## 系统通知与登录时打开（2026-11-02）
+
+### 1. 自动化（固定样本，`src/panel/tests.rs`）
+
+- `notices_follow_engine_transitions_only`：只在告警引擎新发出或升级时产生通知；严重交换与严重磁盘首个样本即通知，压力与处理器需第 2 个样本；持续异常不重复；采集失败与恢复不通知；关闭后不通知。
+- `disk_space_notifies_only_when_critical`：磁盘「提醒」级不通知，升级为「严重」时通知且不提「一键优化」。
+- `english_notices_contain_no_chinese`、`settings_show_notification_and_login_state`：通知与设置页在不可用 / 未询问 / 拒绝 / 允许、登录项关 / 开 / 待批准 / 失败各状态下的文案、按钮与英文覆盖。
+- `fmt --check`、`clippy -D warnings`、71 个测试全部通过。
+
+### 2. 真实 app（`dist/Hostwatch.app`，ad-hoc 签名，macOS 27.2，M3 Max）
+
+- 已验证：启动后创建通知中心并以 `alert` 选项请求权限；系统日志（`usernoted`）显示权限请求已登记并呈现给用户。同一时刻 `SMAppService` 状态读数为 3（NotFound，界面显示为「关」）。
+- 未验证：用户点按「允许 / 不允许」后的状态显示、通知实际送达与点按跳转、登录项登记 / 取消 / 待批准（本环境无法点击面板，也无屏幕录制权限）。
+- 未验证：真实高负载触发通知。从本会话启动的负载进程被限制在约 37.5% 总 CPU，launchd 临时任务同样拿不到 CPU；当时 WindowServer 与 `avconferenced` 正忙，为避免干扰未继续加压。
+
 ## 未验证
 
 - 30 分钟 / 8 小时长时间运行与实际睡眠唤醒（睡眠判定只在固定样本中验证）。
@@ -191,4 +206,4 @@ release 构建，`--interval 5`（比默认 30 秒更密，作为上限情形）
 - 系统设置是否停在「储存空间」页；状态栏图标在各状态下的实际外观（SF Symbols 模板图）。
 - 非 ad-hoc 签名、公证、下载后 Gatekeeper 流程的实测。
 - 菜单栏受控的 30 分钟空闲（本轮 30 分钟中途有未受控 GUI 事件）/ 8 小时运行、睡眠唤醒（计时器在睡眠后的行为）、受控的多次进程排行；系统设置是否落在「储存空间」页。
-- 磁盘 I/O、Windows、通知、.app 打包与签名分发均未实现。
+- 磁盘 I/O、Windows、公证分发均未实现；通知送达、点按跳转与登录项只在固定样本中验证（见上一节）。

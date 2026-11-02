@@ -5,6 +5,7 @@
 //! this state by `panel`, so every transition is testable without a window server. Issue grouping
 //! and Engine-owned recovery live in `issues`.
 
+mod integrations;
 mod issues;
 #[cfg(test)]
 pub mod tests;
@@ -13,8 +14,9 @@ use std::collections::VecDeque;
 
 use crate::advice::{self, Finding, Observation};
 use crate::alerts::{Engine, History, Policy, Sample};
-use crate::model::{ProcessScan, RateStatus, Severity, Snapshot};
+use crate::model::{EventKind, ProcessScan, RateStatus, Severity, Snapshot};
 use crate::optimize::Optimizer;
+pub use integrations::{Integrations, LoginItem, NoticeAccess};
 pub use issues::{ActiveRule, Current, Group, Issue, Recovery};
 
 pub const INTERVAL_PRESETS: [u64; 5] = [5, 10, 30, 60, 300];
@@ -25,6 +27,8 @@ pub const INTERVAL_RANGE: std::ops::RangeInclusive<u64> = 5..=3600;
 pub enum Tool {
     ActivityMonitor,
     StorageSettings,
+    NotificationSettings,
+    LoginItemSettings,
 }
 
 /// Recorded evidence about time between samples. Only these explain a gap; a long timestamp
@@ -125,9 +129,12 @@ pub struct Monitor {
     cadence_from: Option<u64>,
     /// Groups whose last active rule recovered in the newest sample.
     recovered: Option<(u64, Vec<Group>)>,
+    /// Groups the Engine raised or escalated in the newest sample; what notifications announce.
+    raised: Vec<Group>,
     processes: Processes,
     tool: Option<ToolFeedback>,
     optimizer: Optimizer,
+    integrations: Integrations,
 }
 
 impl Monitor {
@@ -146,9 +153,11 @@ impl Monitor {
             consecutive_failures: 0,
             cadence_from: None,
             recovered: None,
+            raised: Vec::new(),
             processes: Processes::NotRead,
             tool: None,
             optimizer: Optimizer::default(),
+            integrations: Integrations::default(),
         }
     }
 
@@ -195,6 +204,19 @@ impl Monitor {
         self.recovered.as_ref().map(|(at, g)| (*at, g.as_slice()))
     }
 
+    pub fn raised(&self) -> &[Group] {
+        &self.raised
+    }
+
+    pub fn integrations(&self) -> &Integrations {
+        &self.integrations
+    }
+
+    /// Notification and login-item state; never touches samples or the Engine.
+    pub fn integrations_mut(&mut self) -> &mut Integrations {
+        &mut self.integrations
+    }
+
     pub fn processes(&self) -> &Processes {
         &self.processes
     }
@@ -215,6 +237,7 @@ impl Monitor {
     pub fn record(&mut self, result: Result<Snapshot, String>, now: u64) {
         self.cadence_from = Some(now);
         self.recovered = None;
+        self.raised.clear();
         let snapshot = match result {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -237,7 +260,16 @@ impl Monitor {
         self.prune_marks();
         let before = self.active_groups();
         let findings = advice::assess(&snapshot);
-        self.engine.observe(at, &findings);
+        for event in self.engine.observe(at, &findings) {
+            if event.kind == EventKind::Recovered {
+                continue;
+            }
+            if let Some(group) = Group::of_rule(event.id) {
+                if !self.raised.contains(&group) {
+                    self.raised.push(group);
+                }
+            }
+        }
         let after = self.active_groups();
         let recovered: Vec<Group> = before.into_iter().filter(|g| !after.contains(g)).collect();
         if !recovered.is_empty() {

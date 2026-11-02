@@ -887,3 +887,141 @@ fn settings_offer_language_choices_in_their_own_language() {
     assert!(has(&settings, "Follow system (中文)"));
     assert!(has(&settings, "Quit Hostwatch"));
 }
+
+#[test]
+fn notices_follow_engine_transitions_only() {
+    let issue_sample = |t| {
+        let mut s = at(snapshot(Pressure::Warning, 4 * GIB), t);
+        s.activity = ready(20.0 * MIB, 95.0);
+        s
+    };
+    let groups = |n: &[Notice]| n.iter().map(|n| n.group).collect::<Vec<_>>();
+    let mut monitor = Monitor::new(30);
+    // Critical swap and disk space are raised on the first sample; pressure and CPU need two.
+    monitor.record(Ok(issue_sample(0)), 0);
+    let first = notices(&monitor, 0, ZH);
+    assert_eq!(groups(&first), [Group::Memory, Group::Disk]);
+    assert_eq!(first[0].title, "电脑正在频繁使用交换");
+    assert!(first[0].body.contains("交换读写合计 20.0 MiB/s"));
+    assert!(first[0].body.contains("一键优化"));
+    // Pressure joins the memory issue (one notification per group replaces the older one).
+    monitor.record(Ok(issue_sample(30)), 30);
+    let second = notices(&monitor, 30, ZH);
+    assert_eq!(groups(&second), [Group::Memory, Group::Cpu]);
+    assert_eq!(second[0].title, "内存不足，电脑可能变慢");
+    // Still abnormal, nothing new: no repeat.
+    monitor.record(Ok(issue_sample(60)), 60);
+    assert!(notices(&monitor, 60, ZH).is_empty());
+    // A failed sample announces nothing; recovery is not announced either.
+    monitor.record(Err("x".into()), 90);
+    assert!(monitor.raised().is_empty());
+    for t in [120, 150] {
+        monitor.record(Ok(normal(t)), t);
+        assert!(notices(&monitor, t, ZH).is_empty());
+    }
+    // Turned off: nothing, even for a fresh critical issue.
+    let mut off = Monitor::new(30);
+    off.integrations_mut().notifications = false;
+    off.record(Ok(issue_sample(0)), 0);
+    assert!(notices(&off, 0, ZH).is_empty());
+}
+
+#[test]
+fn disk_space_notifies_only_when_critical() {
+    let mut monitor = Monitor::new(30);
+    for t in [0, 30] {
+        monitor.record(Ok(at(snapshot(Pressure::Normal, 100 * GIB), t)), t);
+    }
+    assert_eq!(monitor.raised(), [Group::Disk]);
+    assert!(notices(&monitor, 30, ZH).is_empty());
+    monitor.record(Ok(at(snapshot(Pressure::Normal, 4 * GIB), 60)), 60);
+    let escalated = notices(&monitor, 60, ZH);
+    assert_eq!(escalated.len(), 1);
+    assert_eq!(escalated[0].title, "磁盘空间严重不足");
+    assert!(!escalated[0].body.contains("一键优化"));
+}
+
+#[test]
+fn english_notices_contain_no_chinese() {
+    let mut monitor = Monitor::new(30);
+    for t in [0, 30] {
+        let mut s = at(snapshot(Pressure::Critical, 4 * GIB), t);
+        s.activity = ready(20.0 * MIB, 95.0);
+        s.thermal.as_mut().unwrap().state = Some(ThermalState::Critical);
+        monitor.record(Ok(s), t);
+        for notice in notices(&monitor, t, EN) {
+            for text in [&notice.title, &notice.body] {
+                assert!(!has_chinese(text), "{text}");
+            }
+        }
+    }
+}
+
+#[test]
+fn settings_show_notification_and_login_state() {
+    let section = |page: &Page, command: fn(bool) -> Command| {
+        page.blocks
+            .iter()
+            .find_map(|b| match b {
+                Block::Choices(c) if c.iter().any(|b| b.command == command(true)) => Some(
+                    c.iter()
+                        .map(|b| (b.title.clone(), b.primary, b.enabled))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let mut monitor = Monitor::new(30);
+    // From a terminal: shown, but cannot be changed.
+    let settings = page_for(&monitor, Route::Settings);
+    assert_eq!(
+        section(&settings, Command::SetNotifications),
+        [
+            ("开".to_string(), true, false),
+            ("关".to_string(), false, false)
+        ]
+    );
+    assert!(has(&settings, "只有从 Hostwatch.app 打开时才能发通知"));
+    assert!(!section(&settings, Command::SetOpenAtLogin)[0].2);
+
+    let state = monitor.integrations_mut();
+    state.access = NoticeAccess::Denied;
+    state.login = LoginItem::NeedsApproval;
+    let settings = page_for(&monitor, Route::Settings);
+    assert!(commands(&settings).contains(&Command::Open(Tool::NotificationSettings)));
+    assert!(commands(&settings).contains(&Command::Open(Tool::LoginItemSettings)));
+    assert_eq!(
+        section(&settings, Command::SetOpenAtLogin),
+        [
+            ("开".to_string(), true, true),
+            ("关".to_string(), false, true)
+        ]
+    );
+    assert!(has(&settings, "在“登录项”设置中被关闭"));
+
+    let state = monitor.integrations_mut();
+    state.access = NoticeAccess::Allowed;
+    state.login = LoginItem::Off;
+    state.login_error = Some("Operation not permitted".into());
+    let settings = page_for(&monitor, Route::Settings);
+    assert!(!commands(&settings).contains(&Command::Open(Tool::NotificationSettings)));
+    assert!(has(&settings, "同一问题 10 分钟内不重复"));
+    assert!(has(&settings, "上次更改失败：Operation not permitted"));
+    assert!(section(&settings, Command::SetOpenAtLogin)[1].1);
+
+    // Every state reads in English too.
+    for (access, login) in [
+        (NoticeAccess::Unknown, LoginItem::On),
+        (NoticeAccess::NotAsked, LoginItem::Off),
+        (NoticeAccess::Denied, LoginItem::NeedsApproval),
+        (NoticeAccess::Allowed, LoginItem::Unavailable),
+    ] {
+        let state = monitor.integrations_mut();
+        state.access = access;
+        state.login = login;
+        assert_english(&monitor, &format!("{access:?} {login:?}"));
+    }
+    monitor.integrations_mut().notifications = false;
+    assert_english(&monitor, "notifications off");
+}

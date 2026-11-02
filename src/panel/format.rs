@@ -138,6 +138,8 @@ pub(crate) fn tool_label(lang: Lang, tool: Tool) -> &'static str {
     match tool {
         Tool::ActivityMonitor => tr!(lang, "活动监视器", "Activity Monitor"),
         Tool::StorageSettings => tr!(lang, "“储存空间”设置", "Storage settings"),
+        Tool::NotificationSettings => tr!(lang, "“通知”设置", "Notifications settings"),
+        Tool::LoginItemSettings => tr!(lang, "“登录项”设置", "Login Items settings"),
     }
 }
 
@@ -152,6 +154,16 @@ pub(crate) fn tool_path(lang: Lang, tool: Tool) -> &'static str {
             lang,
             "苹果菜单 › 系统设置 › 通用 › 储存空间",
             "Apple menu › System Settings › General › Storage"
+        ),
+        Tool::NotificationSettings => tr!(
+            lang,
+            "苹果菜单 › 系统设置 › 通知 › Hostwatch",
+            "Apple menu › System Settings › Notifications › Hostwatch"
+        ),
+        Tool::LoginItemSettings => tr!(
+            lang,
+            "苹果菜单 › 系统设置 › 通用 › 登录项与扩展",
+            "Apple menu › System Settings › General › Login Items & Extensions"
         ),
     }
 }
