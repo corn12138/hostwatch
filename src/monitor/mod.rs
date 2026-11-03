@@ -9,6 +9,7 @@ mod integrations;
 mod issues;
 #[cfg(test)]
 pub mod tests;
+pub mod trail;
 
 use std::collections::VecDeque;
 
@@ -18,6 +19,7 @@ use crate::model::{EventKind, ProcessScan, RateStatus, Severity, Snapshot};
 use crate::optimize::Optimizer;
 pub use integrations::{Integrations, LoginItem, NoticeAccess};
 pub use issues::{ActiveRule, Current, Group, Issue, Recovery};
+use trail::Trail;
 
 pub const INTERVAL_PRESETS: [u64; 5] = [5, 10, 30, 60, 300];
 pub const INTERVAL_RANGE: std::ops::RangeInclusive<u64> = 5..=3600;
@@ -135,6 +137,8 @@ pub struct Monitor {
     tool: Option<ToolFeedback>,
     optimizer: Optimizer,
     integrations: Integrations,
+    /// Per-app use over the last minutes, for what changed before an issue.
+    trail: Trail,
 }
 
 impl Monitor {
@@ -158,6 +162,7 @@ impl Monitor {
             tool: None,
             optimizer: Optimizer::default(),
             integrations: Integrations::default(),
+            trail: Trail::default(),
         }
     }
 
@@ -215,6 +220,15 @@ impl Monitor {
     /// Notification and login-item state; never touches samples or the Engine.
     pub fn integrations_mut(&mut self) -> &mut Integrations {
         &mut self.integrations
+    }
+
+    pub fn trail(&self) -> &Trail {
+        &self.trail
+    }
+
+    /// Adds per-app use; never touches samples or the Engine.
+    pub fn trail_mut(&mut self) -> &mut Trail {
+        &mut self.trail
     }
 
     pub fn processes(&self) -> &Processes {

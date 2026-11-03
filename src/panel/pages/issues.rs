@@ -102,6 +102,7 @@ pub(crate) fn handling(view: &View, group: Group, blocks: &mut Vec<Block>) {
         bullets.push(line);
     }
     blocks.push(Block::Bullets(bullets));
+    lead_blocks(view, issue, blocks);
     blocks.push(Block::Heading(
         tr!(lang, "你可以这样做", "What you can do").into(),
     ));

@@ -29,6 +29,8 @@ pub(super) struct Ivars {
     pub(super) plan: RefCell<Option<PlanJob>>,
     /// Fresh notices waiting for the apps behind them to be named.
     pub(super) notices: RefCell<Option<NoticeJob>>,
+    /// Process counters from the last trail point, for processor use since then.
+    pub(super) trail_base: RefCell<Option<(Instant, Vec<optimize::ProcSample>)>>,
     /// Checks left before pending quit requests are reported as still running.
     pub(super) quit_checks: Cell<u32>,
     /// Interface language, re-resolved whenever the popover opens.
@@ -149,6 +151,7 @@ impl Controller {
             scan: RefCell::new(None),
             plan: RefCell::new(None),
             notices: RefCell::new(None),
+            trail_base: RefCell::new(None),
             quit_checks: Cell::new(0),
             ui: Cell::new(prefs::current_ui(prefs::load_choice())),
             notifier: OnceCell::new(),
@@ -226,6 +229,7 @@ impl Controller {
             let result = self.ivars().collector.borrow_mut().collect(false);
             let now = now_unix();
             self.ivars().monitor.borrow_mut().record(result, now);
+            self.record_trail(now);
             self.post_notices(now);
             self.refresh_status();
             self.render(false);

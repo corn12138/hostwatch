@@ -189,12 +189,14 @@ release 构建，`--interval 5`（比默认 30 秒更密，作为上限情形）
 - `disk_space_notifies_only_when_critical`：磁盘「提醒」级不通知，升级为「严重」时通知且不提「一键优化」。
 - `english_notices_contain_no_chinese`、`settings_show_notification_and_login_state`：通知与设置页在不可用 / 未询问 / 拒绝 / 允许、登录项关 / 开 / 待批准 / 失败各状态下的文案、按钮与英文覆盖。
 - `notices_name_the_heaviest_open_apps`：内存 / 处理器通知写出最重的 2 个应用（按一键优化同一 `optimize::plan` 排序），无突出应用时不加行，磁盘空间不点名，中英文各一。
-- `fmt --check`、`clippy -D warnings`、72 个测试全部通过。
+- `trail` 三个单元测试与 `issue_page_shows_what_rose_before_it_started`：30 秒节流与 10 分钟容量；内存按开始前 5 分钟窗口比较增长（≥ 256 MiB，含期间新打开的应用），处理器按窗口平均（≥ 25%，短暂尖峰不点名）；记录不足、无明显上升时的说明；通知附同一行；中英文覆盖。
+- `fmt --check`、`clippy -D warnings`、76 个测试全部通过。
 
 ### 2. 真实 app（`dist/Hostwatch.app`，ad-hoc 签名，macOS 27.2，M3 Max）
 
 - 已验证：启动后创建通知中心并以 `alert` 选项请求权限；系统日志（`usernoted`）显示权限请求已登记并呈现给用户。同一时刻 `SMAppService` 状态读数为 3（NotFound，界面显示为「关」）。
 - 未验证：用户点按「允许 / 不允许」后的状态显示、通知实际送达（含应用点名约 1 秒的延迟）与点按跳转、登录项登记 / 取消 / 待批准（本环境无法点击面板，也无屏幕录制权限）。
+- 「开始之前」开销（release，`menubar --interval 5`，面板关闭，5 分钟）：物理内存足迹 14.8–15.1 MB、平均 0.07% 单核；此前同条件无记录时为 14.5–14.7 MB、0.13%，即约多 0.3–0.4 MB，处理器差异在波动范围内。单次读取进程表实测约 3 ms 处理器时间（约 1,100 个进程）。真实问题页上的点名结果未在实机上看到。
 - 未验证：真实高负载触发通知。从本会话启动的负载进程被限制在约 37.5% 总 CPU，launchd 临时任务同样拿不到 CPU；当时 WindowServer 与 `avconferenced` 正忙，为避免干扰未继续加压。
 
 ## 未验证

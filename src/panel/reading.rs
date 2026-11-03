@@ -356,3 +356,111 @@ pub(crate) fn recovery_done(issue: &Issue) -> u32 {
         Recovery::Ongoing => 0,
     }
 }
+
+/// What the per-app trail shows for the minutes before an issue began; `None` for disk space,
+/// which has no app to name, or when the start is unknown.
+pub(crate) fn lead(view: &View, issue: &Issue) -> Option<Lead> {
+    let focus = Focus::for_group(issue.group)?;
+    Some(view.monitor.trail().lead(focus, issue.since?))
+}
+
+pub(crate) fn rise_line(lang: Lang, rise: &Rise) -> String {
+    match rise {
+        Rise::Memory {
+            name,
+            from: Some(from),
+            to,
+        } => {
+            let (name, grew) = (display_name(lang, name), size(to.saturating_sub(*from)));
+            let (from, to) = (size(*from), size(*to));
+            tr!(
+                lang,
+                format!("{name}：{from} → {to}（+{grew}）"),
+                format!("{name}: {from} → {to} (+{grew})")
+            )
+        }
+        Rise::Memory {
+            name,
+            from: None,
+            to,
+        } => {
+            let (name, to) = (display_name(lang, name), size(*to));
+            tr!(
+                lang,
+                format!("{name}：期间新打开，现占 {to}"),
+                format!("{name}: opened meanwhile, now {to}")
+            )
+        }
+        Rise::Cpu { name, percent } => {
+            let name = display_name(lang, name);
+            tr!(
+                lang,
+                format!("{name}：平均 {percent:.0}% 处理器"),
+                format!("{name}: {percent:.0}% CPU on average")
+            )
+        }
+    }
+}
+
+/// The Lead as lines for the issue page: what rose, then how it was measured.
+pub(crate) fn lead_blocks(view: &View, issue: &Issue, blocks: &mut Vec<Block>) {
+    let Some(lead) = lead(view, issue) else {
+        return;
+    };
+    let lang = view.lang;
+    let memory = issue.group == Group::Memory;
+    blocks.push(Block::Heading(
+        tr!(lang, "开始之前", "Before it started").into(),
+    ));
+    let every = trail::EVERY;
+    match lead {
+        Lead::NotEnough => blocks.push(Block::Text(tr!(
+            lang,
+            format!("记录还不够：Hostwatch 每 {every} 秒记录一次已打开应用的用量，只保留最近约 10 分钟；这个问题开始前的记录不足以比较。"),
+            format!("Not enough record yet: Hostwatch notes open apps' use every {every} seconds and keeps about the last 10 minutes; there is too little before this issue began to compare.")
+        ))),
+        Lead::Quiet { from, to } => {
+            let (from, to) = (hm(from), hm(to));
+            blocks.push(Block::Text(if memory {
+                tr!(
+                    lang,
+                    format!("{from}–{to} 之间没有哪个已打开应用的内存增加 256 MiB 以上；可能来自系统进程、后台服务或多个应用一起增长。"),
+                    format!("Between {from} and {to}, no open app grew by 256 MiB or more; it may come from system processes, background services or several apps growing together.")
+                )
+            } else {
+                tr!(
+                    lang,
+                    format!("{from}–{to} 之间没有哪个已打开应用平均占用 25% 以上处理器；可能来自系统进程或后台服务。"),
+                    format!("Between {from} and {to}, no open app averaged 25% CPU or more; it may come from system processes or background services.")
+                )
+            }));
+        }
+        Lead::Rose { from, to, rises } => {
+            let (from, to) = (hm(from), hm(to));
+            blocks.push(Block::Text(if memory {
+                tr!(
+                    lang,
+                    format!("{from}–{to} 之间内存增长最多的已打开应用（含辅助进程）："),
+                    format!("Open apps whose memory grew the most between {from} and {to} (with helpers):")
+                )
+            } else {
+                tr!(
+                    lang,
+                    format!("{from}–{to} 之间处理器占用最高的已打开应用（含辅助进程）："),
+                    format!("Open apps using the most CPU between {from} and {to} (with helpers):")
+                )
+            }));
+            blocks.push(Block::Bullets(
+                rises.iter().map(|r| rise_line(lang, r)).collect(),
+            ));
+        }
+    }
+    blocks.push(Block::Note(
+        tr!(
+            lang,
+            "只在内存中保留，不写入磁盘；系统进程与后台服务不在其中。上升不等于就是原因，可结合“一键优化”的当前占用判断。",
+            "Kept in memory only, never written to disk; system processes and background services are not included. Rising is not proof of cause; compare with the current use shown by Optimize."
+        )
+        .into(),
+    ));
+}

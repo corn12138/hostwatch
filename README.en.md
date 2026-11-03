@@ -11,6 +11,7 @@ Hostwatch watches memory pressure, swap activity, processor load, disk space and
 - **Verdict first.** The popover opens on one conclusion, four rows (memory, processor, disk space, temperature) and at most one suggestion. Each row opens a detail page with a real-timestamp trend; gaps stay gaps.
 - **Alerts that wait for evidence.** A warning needs 2 abnormal samples in a row, critical states alert at once, recovery needs 2 normal samples, and the same issue is not repeated within 10 minutes. Samples that cannot be read count as neither problem nor recovery. Normal file cache and an old swap file never trigger "clean up" advice.
 - **Notifications that name the cause.** From Hostwatch.app, when an issue is raised or gets worse, you get one notification: the issue (for example *"Memory is running low; the Mac may slow down"*), the evidence, and the open apps using the most of that resource (for example *"Using the most memory: Browser (6.2 GiB), Editor (2.1 GiB)"*). Clicking it opens what to do. Disk space notifies only when critical. Recovery is never announced.
+- **What rose before it started.** Every 30 seconds the menu-bar app notes each open app's memory and CPU (with its helpers), kept in memory for about 10 minutes and never written to disk; one read costs about 3 ms of CPU. A memory, processor or heat issue page then names the 1–2 apps whose memory grew the most (≥ 256 MiB) or that averaged the most CPU (≥ 25%) in the 5 minutes before it began, and the notification carries the same line. When the record is too short or nothing stands out, it says so.
 - **Optimize, safely.** For memory, processor or heat issues, Optimize measures your open apps (including the helpers they started) and offers the heaviest ones not in front. After you confirm, it asks them to quit like ⌘Q, so they can ask you to save first. Nothing is force-quit, deleted or changed. Finder, the Dock and Hostwatch itself are never offered.
 - **Open at login**, off by default (Settings › Open at login).
 - **Matches what macOS shows.** Memory figures follow Activity Monitor; disk space follows Storage settings (1 GB = 10⁹ bytes, including space macOS can free on its own).
@@ -49,7 +50,8 @@ JSON output uses raw bytes and bytes/s, `schema_version: 2`, and reports each da
 - Hostwatch reads system statistics only. It uploads nothing, stores no history on disk, and never reads file contents.
 - It changes system state only when you confirm a quit request in Optimize, or turn on Open at login.
 - Thresholds are Hostwatch's own heuristics, not Apple's: swap traffic ≥ 1 MiB/s (critical ≥ 16 MiB/s), processor ≥ 90%, free disk space under 20 GB or 15% (critical under 5 GB or 5%), and the macOS cooling level Hot (critical: Critical). Temperatures alone never alert.
-- Not yet: disk I/O, folder size scans, which app started rising before an alert, notarized builds, Intel builds, and Windows (the Windows entry point says so instead of showing fake data).
+- "Before it started" only covers regular open apps, not system processes or background services.
+- Not yet: disk I/O, folder size scans, notarized builds, Intel builds, and Windows (the Windows entry point says so instead of showing fake data).
 
 ## Build
 

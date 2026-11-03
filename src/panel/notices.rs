@@ -4,7 +4,7 @@
 //! escalation logic also govern notifications; recovery is shown in the panel, not announced.
 //! Disk space changes slowly and is visible in Storage settings, so only critical disk space
 //! interrupts. Memory, processor and heat notifications also name the open apps using the most,
-//! measured the same way as the Optimize page.
+//! measured the same way as the Optimize page, and which app rose most in the minutes before.
 
 use super::*;
 
@@ -105,12 +105,21 @@ pub fn notices(monitor: &Monitor, now: u64, ui: Ui) -> Vec<Notice> {
                     "Click to see what to do, or use Optimize to quit the heaviest apps."
                 ),
             };
+            let mut lines: Vec<String> = issue.rules.iter().map(|r| evidence(&view, r)).collect();
+            if let Some(Lead::Rose { rises, .. }) = lead(&view, issue) {
+                let rose: Vec<String> = rises.iter().map(|r| rise_line(lang, r)).collect();
+                lines.push(tr!(
+                    lang,
+                    format!("开始前上升最多：{}", rose.join("；")),
+                    format!("Rose most before it started: {}", rose.join("; "))
+                ));
+            }
             Notice {
                 group: issue.group,
                 severity: issue.severity,
                 lang,
                 title: issue_title(lang, issue).into(),
-                lines: issue.rules.iter().map(|r| evidence(&view, r)).collect(),
+                lines,
                 hint: hint.into(),
             }
         })

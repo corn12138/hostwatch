@@ -91,6 +91,25 @@ pub fn plan(
     elapsed_ns: u64,
     own_pid: u32,
 ) -> Vec<Candidate> {
+    let offered = per_app(apps, before, after, elapsed_ns, own_pid)
+        .into_iter()
+        .filter(|c| match focus {
+            Focus::Memory => c.footprint_bytes >= MEMORY_FLOOR,
+            Focus::Cpu => c.cpu_percent >= CPU_FLOOR,
+        })
+        .collect();
+    rank(focus, offered)
+}
+
+/// Every offered open app with its own and its helpers' memory, and CPU over the window.
+/// Processes without a baseline in `before` contribute no CPU.
+pub fn per_app(
+    apps: &[RunningApp],
+    before: &[ProcSample],
+    after: &[ProcSample],
+    elapsed_ns: u64,
+    own_pid: u32,
+) -> Vec<Candidate> {
     let offered: HashMap<u32, &RunningApp> = apps
         .iter()
         .filter(|app| app.pid != own_pid)
@@ -130,7 +149,7 @@ pub fn plan(
         entry.2 += 1;
     }
     let elapsed = elapsed_ns.max(1) as f64;
-    let mut candidates: Vec<Candidate> = totals
+    totals
         .into_iter()
         .map(|(pid, (footprint, cpu, processes))| {
             let app = offered[&pid];
@@ -145,11 +164,10 @@ pub fn plan(
                 selected: false,
             }
         })
-        .filter(|c| match focus {
-            Focus::Memory => c.footprint_bytes >= MEMORY_FLOOR,
-            Focus::Cpu => c.cpu_percent >= CPU_FLOOR,
-        })
-        .collect();
+        .collect()
+}
+
+fn rank(focus: Focus, mut candidates: Vec<Candidate>) -> Vec<Candidate> {
     candidates.sort_by(|a, b| match focus {
         Focus::Memory => b.footprint_bytes.cmp(&a.footprint_bytes),
         Focus::Cpu => b.cpu_percent.total_cmp(&a.cpu_percent),

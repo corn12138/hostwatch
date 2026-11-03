@@ -51,6 +51,50 @@ fn exited(pid: u32) -> bool {
 }
 
 impl Controller {
+    /// Adds a point to the per-app trail when one is due (every `trail::EVERY` seconds). Reading
+    /// the process table takes a few milliseconds, so it runs inline; a failed read skips the point.
+    pub(super) fn record_trail(&self, now: u64) {
+        {
+            let monitor = self.ivars().monitor.borrow();
+            if monitor.current().is_none() || !monitor.trail().due(now) {
+                return;
+            }
+        }
+        let Ok(table) = platform::process_table() else {
+            return;
+        };
+        let taken = Instant::now();
+        let current = samples(&table);
+        let apps = running_apps();
+        let previous = self
+            .ivars()
+            .trail_base
+            .borrow_mut()
+            .replace((taken, current.clone()));
+        let (before, elapsed) = match &previous {
+            Some((at, before)) => (
+                before.as_slice(),
+                taken.duration_since(*at).as_nanos() as u64,
+            ),
+            None => (current.as_slice(), 1),
+        };
+        let measured = previous.is_some();
+        let usage = optimize::per_app(&apps, before, &current, elapsed, std::process::id());
+        let point = trail::Point {
+            at: now,
+            apps: usage
+                .into_iter()
+                .map(|c| trail::AppUse {
+                    key: c.bundle_id.unwrap_or_else(|| c.name.clone()),
+                    name: c.name,
+                    footprint: c.footprint_bytes,
+                    cpu_percent: measured.then_some(c.cpu_percent),
+                })
+                .collect(),
+        };
+        self.ivars().monitor.borrow_mut().trail_mut().push(point);
+    }
+
     /// Names the open apps behind fresh notices in the background (about 1 second when the
     /// processor is involved), then posts them. Notices are posted unnamed when there is nothing
     /// to name or the analysis cannot start; a second batch never waits behind the first.

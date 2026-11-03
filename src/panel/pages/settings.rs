@@ -88,7 +88,7 @@ pub(crate) fn settings(view: &View, blocks: &mut Vec<Block>) {
     blocks.push(Block::Heading(
         tr!(lang, "数据说明", "About the data").into(),
     ));
-    let pairs: [(&str, &str, &str, &str); 8] = [
+    let pairs: [(&str, &str, &str, &str); 9] = [
         (
             "内存",
             "“已用”= 应用 + 联动 + 压缩内存，不含文件缓存。“内存压力”是系统给出的等级，比已用量更能反映是否不够用。",
@@ -124,6 +124,12 @@ pub(crate) fn settings(view: &View, blocks: &mut Vec<Block>) {
             "只会请你打开的应用像按 ⌘Q 一样正常退出：应用会先询问是否保存，不强制结束、不删除文件、不改系统设置。",
             "Optimize",
             "Only asks apps you opened to quit normally, like ⌘Q: they can ask you to save first. Nothing is force-quit, no files are deleted, no settings change.",
+        ),
+        (
+            "开始之前",
+            "每 30 秒记录一次已打开应用（含辅助进程）的内存和处理器用量，只在内存中保留约 10 分钟、不写入磁盘，用来说明问题开始前哪个应用在上升。",
+            "Before it started",
+            "Every 30 seconds Hostwatch notes each open app's memory and CPU (with its helpers), kept in memory for about 10 minutes and never written to disk, to show which app was rising before an issue.",
         ),
         (
             "进程排行",

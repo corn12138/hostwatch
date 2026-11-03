@@ -19,6 +19,7 @@ use crate::advice::{GB, GIB, MIB};
 use crate::alerts::Sample;
 pub use crate::lang::{Lang, LanguageChoice, Ui};
 use crate::model::{Pressure, RateStatus, Severity, ThermalState};
+use crate::monitor::trail::{self, Lead, Rise};
 use crate::monitor::{
     unmeasured, ActiveRule, Current, Group, Health, Issue, Latest, LoginItem, Mark, Monitor,
     NoticeAccess, Processes, Recovery, Tool, INTERVAL_PRESETS,

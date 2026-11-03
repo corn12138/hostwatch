@@ -1084,3 +1084,70 @@ fn notices_name_the_heaviest_open_apps() {
     disk[0].attribute(&apps);
     assert!(!disk[0].body().contains("Browser"));
 }
+
+#[test]
+fn issue_page_shows_what_rose_before_it_started() {
+    use crate::monitor::trail::{AppUse, Point};
+    let app = |key: &str, footprint, cpu| AppUse {
+        key: key.into(),
+        name: key.into(),
+        footprint,
+        cpu_percent: cpu,
+    };
+    let issue_sample = |t| {
+        let mut s = at(snapshot(Pressure::Warning, 300 * GIB), t);
+        s.activity = ready(20.0 * MIB, 95.0);
+        s
+    };
+    // No record yet: says so instead of guessing.
+    let mut empty = Monitor::new(30);
+    for t in [30, 60] {
+        empty.record(Ok(issue_sample(t)), t);
+    }
+    let handling = page_for(&empty, Route::Handling(Group::Memory));
+    assert!(has(&handling, "记录还不够"));
+    assert!(!has(
+        &page_for(&empty, Route::Handling(Group::Disk)),
+        "开始之前"
+    ));
+
+    let mut monitor = Monitor::new(30);
+    monitor.trail_mut().push(Point {
+        at: 0,
+        apps: vec![app("Browser", GIB, None), app("Encoder", 0, None)],
+    });
+    monitor.trail_mut().push(Point {
+        at: 30,
+        apps: vec![
+            app("Browser", 3 * GIB, Some(10.0)),
+            app("Encoder", 0, Some(180.0)),
+        ],
+    });
+    for t in [30, 60] {
+        monitor.record(Ok(issue_sample(t)), t);
+    }
+    let memory = page_for(&monitor, Route::Handling(Group::Memory));
+    assert!(has(&memory, "开始之前"));
+    assert!(has(&memory, "Browser：1.0 GiB → 3.0 GiB（+2.0 GiB）"));
+    assert!(has(&memory, "只在内存中保留，不写入磁盘"));
+    let cpu = page_for(&monitor, Route::Handling(Group::Cpu));
+    assert!(has(&cpu, "Encoder：平均 180% 处理器"));
+    assert!(!has(&cpu, "Browser："), "10% CPU is not worth naming");
+    // The swap notification raised at 30 carries the same finding.
+    let mut first = Monitor::new(30);
+    first.trail_mut().push(Point {
+        at: 0,
+        apps: vec![app("Browser", GIB, None)],
+    });
+    first.trail_mut().push(Point {
+        at: 30,
+        apps: vec![app("Browser", 3 * GIB, Some(10.0))],
+    });
+    first.record(Ok(issue_sample(30)), 30);
+    let notice = &notices(&first, 30, ZH)[0];
+    assert!(notice
+        .body()
+        .contains("开始前上升最多：Browser：1.0 GiB → 3.0 GiB（+2.0 GiB）"));
+    assert_english(&monitor, "trail");
+    assert_english(&empty, "trail empty");
+}

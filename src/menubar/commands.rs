@@ -45,6 +45,7 @@ impl Controller {
                 };
                 if !paused {
                     // Fresh baseline: a rate spanning the whole pause would not describe "now".
+                    *self.ivars().trail_base.borrow_mut() = None;
                     match platform::collector() {
                         Ok(collector) => *self.ivars().collector.borrow_mut() = collector,
                         Err(error) => self.ivars().monitor.borrow_mut().record(Err(error), now),
