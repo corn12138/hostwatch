@@ -26,6 +26,7 @@ mod optimizer;
 mod prefs;
 mod render;
 mod rows;
+mod space;
 mod views;
 
 use std::cell::{Cell, OnceCell, RefCell};

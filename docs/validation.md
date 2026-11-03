@@ -190,7 +190,9 @@ release 构建，`--interval 5`（比默认 30 秒更密，作为上限情形）
 - `english_notices_contain_no_chinese`、`settings_show_notification_and_login_state`：通知与设置页在不可用 / 未询问 / 拒绝 / 允许、登录项关 / 开 / 待批准 / 失败各状态下的文案、按钮与英文覆盖。
 - `notices_name_the_heaviest_open_apps`：内存 / 处理器通知写出最重的 2 个应用（按一键优化同一 `optimize::plan` 排序），无突出应用时不加行，磁盘空间不点名，中英文各一。
 - `trail` 三个单元测试与 `issue_page_shows_what_rose_before_it_started`：30 秒节流与 10 分钟容量；内存按开始前 5 分钟窗口比较增长（≥ 256 MiB，含期间新打开的应用），处理器按窗口平均（≥ 25%，短暂尖峰不点名）；记录不足、无明显上升时的说明；通知附同一行；中英文覆盖。
-- `fmt --check`、`clippy -D warnings`、76 个测试全部通过。
+- `space` 四个单元测试（临时目录）与 `space_page_from_scan_to_drill_down`：分配大小、硬链接只算一次、不跟随替身；受保护文件夹列出但不进入、点选后才统计；停止 / 超时后各文件夹都有部分大小并标为至少值；只在个人文件夹内、不重叠；页面逐层点进、上一层、在访达中显示、中英文覆盖。
+- 真实个人文件夹（`cargo test real_home -- --ignored`，debug 构建）：20 秒内查看约 83 万项、所有顶层项目都有大小，14 个大文件夹标为至少值，3 个受保护文件夹未进入，8 个文件夹读不到；改为轮流统计前，按字母顺序只统计到点开头的文件夹，Library 等 107 项未统计。
+- `fmt --check`、`clippy -D warnings`、81 个测试全部通过（另有 1 个手动测试）。
 
 ### 2. 真实 app（`dist/Hostwatch.app`，ad-hoc 签名，macOS 27.2，M3 Max）
 

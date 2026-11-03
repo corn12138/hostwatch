@@ -29,6 +29,9 @@ pub(super) struct Ivars {
     pub(super) plan: RefCell<Option<PlanJob>>,
     /// Fresh notices waiting for the apps behind them to be named.
     pub(super) notices: RefCell<Option<NoticeJob>>,
+    /// The folder-size scan in flight, if any.
+    pub(super) space: RefCell<Option<space::SpaceJob>>,
+    pub(super) space_ticks: Cell<u32>,
     /// Process counters from the last trail point, for processor use since then.
     pub(super) trail_base: RefCell<Option<(Instant, Vec<optimize::ProcSample>)>>,
     /// Checks left before pending quit requests are reported as still running.
@@ -152,6 +155,8 @@ impl Controller {
             plan: RefCell::new(None),
             notices: RefCell::new(None),
             trail_base: RefCell::new(None),
+            space: RefCell::new(None),
+            space_ticks: Cell::new(0),
             quit_checks: Cell::new(0),
             ui: Cell::new(prefs::current_ui(prefs::load_choice())),
             notifier: OnceCell::new(),

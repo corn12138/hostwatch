@@ -6,6 +6,7 @@ mod issues;
 mod optimize;
 mod processes;
 mod settings;
+mod space;
 
 use super::*;
 pub(crate) use detail::{cpu_detail, disk_detail, memory_detail, thermal_detail};
@@ -14,6 +15,7 @@ pub(crate) use issues::{handling, issues};
 pub(crate) use optimize::optimize;
 pub(crate) use processes::processes;
 pub(crate) use settings::settings;
+pub(crate) use space::space;
 
 pub(crate) fn freshness_note(view: &View, sources: &str) -> String {
     let lang = view.lang;

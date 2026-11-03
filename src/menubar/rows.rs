@@ -232,6 +232,25 @@ impl Kit<'_> {
             );
             size.setAlignment(NSTextAlignment::Right);
             self.put(&card, &size, w - 82.0, top + (ROW - h) / 2.0, 70.0, h);
+            if let Some(command) = &row.command {
+                // SAFETY: `perform:` is defined on Controller, which lives for the whole app.
+                let overlay = unsafe {
+                    NSButton::buttonWithTitle_target_action(
+                        ns_string!(""),
+                        Some(self.target),
+                        Some(sel!(perform:)),
+                        mtm,
+                    )
+                };
+                overlay.setBordered(false);
+                overlay.setTag(self.tag(command));
+                overlay.setAccessibilityLabel(Some(&NSString::from_str(&format!(
+                    "{} {}",
+                    row.name.trim_end_matches(" ›"),
+                    row.size
+                ))));
+                self.put(&card, &overlay, 0.0, top, w, ROW);
+            }
         }
         parent.addSubview(&card);
         ROW * rows.len() as f64

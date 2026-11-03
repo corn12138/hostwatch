@@ -52,6 +52,8 @@ pub enum Route {
     Settings,
     /// Ask the apps behind an issue to quit normally.
     Optimize(Group),
+    /// Which folders take the most space.
+    Space,
 }
 
 impl Route {
@@ -67,6 +69,7 @@ impl Route {
             Route::Handling(_) => tr!(lang, "处理方法", "What to do"),
             Route::Processes => tr!(lang, "进程排行", "Processes"),
             Route::Settings => tr!(lang, "设置", "Settings"),
+            Route::Space => tr!(lang, "占用空间", "Space"),
         }
     }
 }
@@ -126,6 +129,11 @@ pub enum Command {
     SetLanguage(LanguageChoice),
     SetNotifications(bool),
     SetOpenAtLogin(bool),
+    /// Measure what is inside this folder (an absolute path inside home).
+    ScanFolder(String),
+    CancelSpace,
+    /// Open this folder in Finder.
+    Reveal(String),
     More,
     Quit,
 }
@@ -200,6 +208,8 @@ pub struct ProcessRow {
     pub name: String,
     pub size: String,
     pub fraction: f64,
+    /// Makes the whole row a button, e.g. to open a folder.
+    pub command: Option<Command>,
 }
 
 /// One checkbox row.
@@ -292,6 +302,7 @@ pub fn page(monitor: &Monitor, route: Route, back: Option<Route>, now: u64, ui: 
             title: match route {
                 Route::Processes => tr!(lang, "占用内存最多的进程", "Top memory users").into(),
                 Route::Settings => tr!(lang, "设置与数据说明", "Settings and data notes").into(),
+                Route::Space => tr!(lang, "哪些文件夹占用空间", "What uses space").into(),
                 Route::Issues => tr!(lang, "需要注意的问题", "Issues needing attention").into(),
                 Route::Handling(group) => view
                     .issues
@@ -317,6 +328,7 @@ pub fn page(monitor: &Monitor, route: Route, back: Option<Route>, now: u64, ui: 
         Route::Handling(group) => pages::handling(&view, group, &mut blocks),
         Route::Processes => pages::processes(&view, &mut blocks),
         Route::Settings => pages::settings(&view, &mut blocks),
+        Route::Space => pages::space(&view, &mut blocks),
     }
     let every = interval_label(lang, monitor.interval());
     Page {

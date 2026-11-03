@@ -121,7 +121,14 @@ pub(crate) fn handling(view: &View, group: Group, blocks: &mut Vec<Block>) {
         );
         buttons.push(open);
     } else {
-        buttons.push(open.primary());
+        buttons.push(
+            Button::new(
+                tr!(lang, "哪些文件夹占用空间", "What uses space"),
+                Command::Go(Route::Space),
+            )
+            .primary(),
+        );
+        buttons.push(open);
     }
     let (detail, resource) = match group {
         Group::Memory => (

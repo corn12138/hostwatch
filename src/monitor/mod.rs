@@ -17,6 +17,7 @@ use crate::advice::{self, Finding, Observation};
 use crate::alerts::{Engine, History, Policy, Sample};
 use crate::model::{EventKind, ProcessScan, RateStatus, Severity, Snapshot};
 use crate::optimize::Optimizer;
+use crate::space::Space;
 pub use integrations::{Integrations, LoginItem, NoticeAccess};
 pub use issues::{ActiveRule, Current, Group, Issue, Recovery};
 use trail::Trail;
@@ -31,6 +32,8 @@ pub enum Tool {
     StorageSettings,
     NotificationSettings,
     LoginItemSettings,
+    /// A folder shown in Finder.
+    Finder,
 }
 
 /// Recorded evidence about time between samples. Only these explain a gap; a long timestamp
@@ -139,6 +142,7 @@ pub struct Monitor {
     integrations: Integrations,
     /// Per-app use over the last minutes, for what changed before an issue.
     trail: Trail,
+    space: Space,
 }
 
 impl Monitor {
@@ -163,6 +167,7 @@ impl Monitor {
             optimizer: Optimizer::default(),
             integrations: Integrations::default(),
             trail: Trail::default(),
+            space: Space::new(std::env::var_os("HOME").map_or_else(|| "/".into(), Into::into)),
         }
     }
 
@@ -229,6 +234,15 @@ impl Monitor {
     /// Adds per-app use; never touches samples or the Engine.
     pub fn trail_mut(&mut self) -> &mut Trail {
         &mut self.trail
+    }
+
+    pub fn space(&self) -> &Space {
+        &self.space
+    }
+
+    /// Folder scans; never touch samples or the Engine.
+    pub fn space_mut(&mut self) -> &mut Space {
+        &mut self.space
     }
 
     pub fn processes(&self) -> &Processes {

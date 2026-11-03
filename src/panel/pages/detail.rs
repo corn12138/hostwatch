@@ -288,10 +288,16 @@ pub(crate) fn disk_detail(view: &View, blocks: &mut Vec<Block>) {
         )
         .into(),
     ));
-    let mut buttons = vec![Button::new(
-        open_tool_title(lang, Tool::StorageSettings),
-        Command::Open(Tool::StorageSettings),
-    )];
+    let mut buttons = vec![
+        Button::new(
+            tr!(lang, "哪些文件夹占用空间", "What uses space"),
+            Command::Go(Route::Space),
+        ),
+        Button::new(
+            open_tool_title(lang, Tool::StorageSettings),
+            Command::Open(Tool::StorageSettings),
+        ),
+    ];
     related_issue(view, Group::Disk, &mut buttons);
     blocks.push(Block::Buttons(buttons));
     tool_feedback(view, Tool::StorageSettings, blocks);

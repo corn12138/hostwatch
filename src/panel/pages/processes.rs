@@ -62,6 +62,7 @@ pub(crate) fn processes(view: &View, blocks: &mut Vec<Block>) {
                                 name: display_name(lang, &p.name),
                                 size: size(memory(p)),
                                 fraction: memory(p) as f64 / largest as f64,
+                                command: None,
                             })
                             .collect(),
                     ));

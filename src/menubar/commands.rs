@@ -111,6 +111,18 @@ impl Controller {
                     .integrations_mut()
                     .login_error = error;
             }
+            Command::ScanFolder(root) => {
+                self.navigate(Route::Space);
+                self.start_space(root, now);
+            }
+            Command::CancelSpace => self.cancel_space(),
+            Command::Reveal(path) => {
+                let result = space::reveal(self.ui().lang, &path);
+                self.ivars()
+                    .monitor
+                    .borrow_mut()
+                    .note_open(Tool::Finder, result, now);
+            }
             Command::More => {
                 self.show_more();
                 return;
@@ -196,9 +208,13 @@ impl Controller {
                 self.post_now(&notices);
             }
         }
+        if self.collect_space(wait, now) {
+            changed = true;
+        }
         let idle = self.ivars().scan.borrow().is_none()
             && self.ivars().plan.borrow().is_none()
-            && self.ivars().notices.borrow().is_none();
+            && self.ivars().notices.borrow().is_none()
+            && self.ivars().space.borrow().is_none();
         if idle {
             if let Some(timer) = self.ivars().poll_timer.borrow_mut().take() {
                 timer.invalidate();
@@ -270,6 +286,8 @@ impl Controller {
                 timer.invalidate();
             }
         }
+        // A folder scan can run for seconds; ask it to stop before waiting for it.
+        self.cancel_space();
         self.collect_jobs(true);
         if let Some(popover) = self.ivars().popover.get() {
             popover.close();
@@ -305,6 +323,9 @@ pub(super) fn open_tool(lang: Lang, tool: Tool) -> Result<(), String> {
             "通知设置地址无效",
             "The Notifications settings address is invalid"
         ))?,
+        Tool::Finder => NSURL::fileURLWithPath(&NSString::from_str(
+            &std::env::var("HOME").unwrap_or_else(|_| "/".into()),
+        )),
         Tool::LoginItemSettings => NSURL::URLWithString(ns_string!(LOGIN_ITEM_SETTINGS_URL))
             .ok_or(tr!(
                 lang,

@@ -694,6 +694,7 @@ fn every_route() -> Vec<Route> {
         Route::Issues,
         Route::Processes,
         Route::Settings,
+        Route::Space,
     ];
     for resource in [
         Resource::Memory,
@@ -1150,4 +1151,117 @@ fn issue_page_shows_what_rose_before_it_started() {
         .contains("开始前上升最多：Browser：1.0 GiB → 3.0 GiB（+2.0 GiB）"));
     assert_english(&monitor, "trail");
     assert_english(&empty, "trail empty");
+}
+
+#[test]
+fn space_page_from_scan_to_drill_down() {
+    use crate::space::{Entry, Kind, Report, Space, Stop};
+    use std::path::PathBuf;
+    let home = PathBuf::from("/Users/me");
+    let mut monitor = Monitor::new(30);
+    *monitor.space_mut() = Space::new(home.clone());
+    let start = page_for(&monitor, Route::Space);
+    assert!(commands(&start).contains(&Command::ScanFolder("/Users/me".into())));
+    assert!(has(&start, "不打开、不移动、不删除任何文件"));
+
+    assert!(monitor.space_mut().begin(home.clone(), 5));
+    monitor.space_mut().progress(4096);
+    let scanning = page_for(&monitor, Route::Space);
+    assert!(has(&scanning, "正在统计 ~…已查看 4096 项"));
+    assert!(commands(&scanning).contains(&Command::CancelSpace));
+
+    let entry = |name: &str, bytes, kind, partial| Entry {
+        name: name.into(),
+        path: home.join(name),
+        bytes,
+        kind,
+        partial,
+    };
+    monitor.space_mut().finish(
+        Ok(Report {
+            root: home.clone(),
+            entries: vec![
+                entry("Library", 40 * 1_000_000_000, Kind::Folder, true),
+                entry("Movies", 12 * 1_000_000_000, Kind::Folder, false),
+                entry("big.dmg", 3 * 1_000_000_000, Kind::File, false),
+                entry("Documents", 0, Kind::Protected, true),
+            ],
+            total: 55 * 1_000_000_000,
+            items: 120_000,
+            unreadable: 3,
+            guarded: 2,
+            unfinished: 0,
+            stopped: Some(Stop::Budget),
+        }),
+        25,
+    );
+    let done = page_for(&monitor, Route::Space);
+    assert!(has(&done, "至少 55.0 GB"));
+    let rows: Vec<(String, String, Option<Command>)> = done
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            Block::Processes(rows) => Some(
+                rows.iter()
+                    .map(|r| (r.name.clone(), r.size.clone(), r.command.clone()))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (
+                "Library ›".to_string(),
+                "≥ 40.0 GB".to_string(),
+                Some(Command::ScanFolder("/Users/me/Library".into()))
+            ),
+            (
+                "Movies ›".to_string(),
+                "12.0 GB".to_string(),
+                Some(Command::ScanFolder("/Users/me/Movies".into()))
+            ),
+            ("big.dmg".to_string(), "3.0 GB".to_string(), None),
+            (
+                "Documents ›".to_string(),
+                "点按统计".to_string(),
+                Some(Command::ScanFolder("/Users/me/Documents".into()))
+            ),
+        ]
+    );
+    assert!(has(&done, "统计到 20 秒上限时停止"));
+    assert!(has(&done, "受 macOS 保护，默认不统计"));
+    assert!(has(&done, "3 个文件夹读不到"));
+    // Home has no "up one level"; a subfolder does, and never above home.
+    assert!(!has(&done, "上一层"));
+    assert!(commands(&done).contains(&Command::Reveal("/Users/me".into())));
+    assert_english(&monitor, "space done");
+
+    assert!(monitor.space_mut().begin(home.join("Library"), 30));
+    monitor.space_mut().finish(
+        Ok(Report {
+            root: home.join("Library"),
+            entries: vec![],
+            total: 0,
+            items: 1,
+            unreadable: 0,
+            guarded: 0,
+            unfinished: 0,
+            stopped: None,
+        }),
+        31,
+    );
+    let library = page_for(&monitor, Route::Space);
+    assert!(has(&library, "这个文件夹是空的"));
+    assert!(commands(&library).contains(&Command::ScanFolder("/Users/me".into())));
+    assert!(has(&library, "~/Library"));
+
+    // Disk issues lead here first.
+    let mut disk = Monitor::new(30);
+    disk.record(Ok(at(snapshot(Pressure::Normal, 4 * GIB), 0)), 0);
+    let handling = page_for(&disk, Route::Handling(Group::Disk));
+    assert!(commands(&handling).contains(&Command::Go(Route::Space)));
+    assert!(commands(&page_for(&disk, Route::Detail(Resource::Disk)))
+        .contains(&Command::Go(Route::Space)));
 }

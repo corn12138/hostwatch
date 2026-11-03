@@ -15,6 +15,8 @@ mod optimize;
 #[cfg(any(target_os = "macos", test))]
 mod panel;
 mod platform;
+#[cfg(any(target_os = "macos", test))]
+mod space;
 
 use std::{
     io::{self, Write},

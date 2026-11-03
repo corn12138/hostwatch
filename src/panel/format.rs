@@ -140,6 +140,7 @@ pub(crate) fn tool_label(lang: Lang, tool: Tool) -> &'static str {
         Tool::StorageSettings => tr!(lang, "“储存空间”设置", "Storage settings"),
         Tool::NotificationSettings => tr!(lang, "“通知”设置", "Notifications settings"),
         Tool::LoginItemSettings => tr!(lang, "“登录项”设置", "Login Items settings"),
+        Tool::Finder => tr!(lang, "访达", "Finder"),
     }
 }
 
@@ -164,6 +165,11 @@ pub(crate) fn tool_path(lang: Lang, tool: Tool) -> &'static str {
             lang,
             "苹果菜单 › 系统设置 › 通用 › 登录项与扩展",
             "Apple menu › System Settings › General › Login Items & Extensions"
+        ),
+        Tool::Finder => tr!(
+            lang,
+            "程序坞 › 访达，再前往该文件夹",
+            "Dock › Finder, then go to the folder"
         ),
     }
 }
