@@ -177,7 +177,7 @@ impl Notifier {
     pub(super) fn post(&self, notice: &Notice) {
         let content = UNMutableNotificationContent::new();
         content.setTitle(&NSString::from_str(&notice.title));
-        content.setBody(&NSString::from_str(&notice.body));
+        content.setBody(&NSString::from_str(&notice.body()));
         content.setThreadIdentifier(&NSString::from_str(notice.group.key()));
         content.setInterruptionLevel(UNNotificationInterruptionLevel::Active);
         let id = NSString::from_str(&format!("{ID_PREFIX}{}", notice.group.key()));

@@ -188,7 +188,16 @@ impl Controller {
                 .finish(result, now);
             changed = true;
         }
-        let idle = self.ivars().scan.borrow().is_none() && self.ivars().plan.borrow().is_none();
+        let notices = take_if(&self.ivars().notices, wait);
+        if let Some(job) = notices {
+            // A job that ended without a result (it panicked) has nothing left to post.
+            if let Some(notices) = job.finish() {
+                self.post_now(&notices);
+            }
+        }
+        let idle = self.ivars().scan.borrow().is_none()
+            && self.ivars().plan.borrow().is_none()
+            && self.ivars().notices.borrow().is_none();
         if idle {
             if let Some(timer) = self.ivars().poll_timer.borrow_mut().take() {
                 timer.invalidate();

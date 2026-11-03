@@ -23,7 +23,7 @@ use crate::monitor::{
     unmeasured, ActiveRule, Current, Group, Health, Issue, Latest, LoginItem, Mark, Monitor,
     NoticeAccess, Processes, Recovery, Tool, INTERVAL_PRESETS,
 };
-use crate::optimize::{Focus, Optimization, QuitState};
+use crate::optimize::{Candidate, Focus, Optimization, QuitState};
 
 pub use chart::{cpu_chart, memory_chart, swap_chart, temperature_chart};
 use format::*;

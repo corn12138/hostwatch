@@ -1,5 +1,6 @@
 //! One-click optimization on the AppKit side: list the person's open apps, measure them in the
-//! background, then send normal quit requests (like ⌘Q) to the apps the person confirmed.
+//! background, then send normal quit requests (like ⌘Q) to the apps the person confirmed. The same
+//! measurement names the apps behind fresh notifications.
 
 use super::*;
 
@@ -50,6 +51,57 @@ fn exited(pid: u32) -> bool {
 }
 
 impl Controller {
+    /// Names the open apps behind fresh notices in the background (about 1 second when the
+    /// processor is involved), then posts them. Notices are posted unnamed when there is nothing
+    /// to name or the analysis cannot start; a second batch never waits behind the first.
+    pub(super) fn attribute_and_post(&self, notices: Vec<Notice>) {
+        let named = notices.iter().any(|n| n.focus().is_some());
+        if !named || self.ivars().notices.borrow().is_some() {
+            self.post_now(&notices);
+            return;
+        }
+        let apps = running_apps();
+        let own = std::process::id();
+        let unnamed = notices.clone();
+        let job = Job::spawn("hostwatch-notices", move || {
+            let mut notices = notices;
+            let cpu = notices
+                .iter()
+                .any(|n| n.focus() == Some(optimize::Focus::Cpu));
+            let Ok(before) = platform::process_table() else {
+                return notices;
+            };
+            let started = Instant::now();
+            let after = if cpu {
+                std::thread::sleep(Duration::from_millis(optimize::CPU_WINDOW_MS));
+                match platform::process_table() {
+                    Ok(after) => after,
+                    Err(_) => return notices,
+                }
+            } else {
+                platform::ProcTable {
+                    readable: before.readable.clone(),
+                    listed: before.listed,
+                }
+            };
+            let elapsed = started.elapsed().as_nanos() as u64;
+            let (before, after) = (samples(&before), samples(&after));
+            for notice in &mut notices {
+                if let Some(focus) = notice.focus() {
+                    notice.attribute(&optimize::plan(focus, &apps, &before, &after, elapsed, own));
+                }
+            }
+            notices
+        });
+        match job {
+            Ok(job) => {
+                *self.ivars().notices.borrow_mut() = Some(job);
+                self.poll_jobs();
+            }
+            Err(_) => self.post_now(&unnamed),
+        }
+    }
+
     pub(super) fn start_plan(&self, group: Group, now: u64) {
         let Some(focus) = optimize::Focus::for_group(group) else {
             return;

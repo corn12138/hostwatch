@@ -6,6 +6,7 @@ use notify::Notifier;
 
 pub(super) type ScanJob = Job<Result<ProcessScan, String>>;
 pub(super) type PlanJob = Job<Result<Vec<Candidate>, String>>;
+pub(super) type NoticeJob = Job<Vec<Notice>>;
 
 pub(super) struct Ivars {
     pub(super) monitor: RefCell<Monitor>,
@@ -26,6 +27,8 @@ pub(super) struct Ivars {
     pub(super) closed_at: Cell<Option<Instant>>,
     pub(super) scan: RefCell<Option<ScanJob>>,
     pub(super) plan: RefCell<Option<PlanJob>>,
+    /// Fresh notices waiting for the apps behind them to be named.
+    pub(super) notices: RefCell<Option<NoticeJob>>,
     /// Checks left before pending quit requests are reported as still running.
     pub(super) quit_checks: Cell<u32>,
     /// Interface language, re-resolved whenever the popover opens.
@@ -145,6 +148,7 @@ impl Controller {
             closed_at: Cell::new(None),
             scan: RefCell::new(None),
             plan: RefCell::new(None),
+            notices: RefCell::new(None),
             quit_checks: Cell::new(0),
             ui: Cell::new(prefs::current_ui(prefs::load_choice())),
             notifier: OnceCell::new(),
@@ -231,15 +235,20 @@ impl Controller {
     /// Announces issues the Engine just raised or escalated. Skipped while the popover is open,
     /// since the same issue is already on screen.
     fn post_notices(&self, now: u64) {
-        let Some(notifier) = self.ivars().notifier.get() else {
-            return;
-        };
-        if self.shown() {
+        if self.ivars().notifier.get().is_none() || self.shown() {
             return;
         }
         let notices = panel::notices(&self.ivars().monitor.borrow(), now, self.ui());
-        for notice in &notices {
-            notifier.post(notice);
+        if !notices.is_empty() {
+            self.attribute_and_post(notices);
+        }
+    }
+
+    pub(super) fn post_now(&self, notices: &[Notice]) {
+        if let Some(notifier) = self.ivars().notifier.get() {
+            for notice in notices {
+                notifier.post(notice);
+            }
         }
     }
 

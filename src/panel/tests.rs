@@ -902,8 +902,8 @@ fn notices_follow_engine_transitions_only() {
     let first = notices(&monitor, 0, ZH);
     assert_eq!(groups(&first), [Group::Memory, Group::Disk]);
     assert_eq!(first[0].title, "电脑正在频繁使用交换");
-    assert!(first[0].body.contains("交换读写合计 20.0 MiB/s"));
-    assert!(first[0].body.contains("一键优化"));
+    assert!(first[0].body().contains("交换读写合计 20.0 MiB/s"));
+    assert!(first[0].body().contains("一键优化"));
     // Pressure joins the memory issue (one notification per group replaces the older one).
     monitor.record(Ok(issue_sample(30)), 30);
     let second = notices(&monitor, 30, ZH);
@@ -938,7 +938,7 @@ fn disk_space_notifies_only_when_critical() {
     let escalated = notices(&monitor, 60, ZH);
     assert_eq!(escalated.len(), 1);
     assert_eq!(escalated[0].title, "磁盘空间严重不足");
-    assert!(!escalated[0].body.contains("一键优化"));
+    assert!(!escalated[0].body().contains("一键优化"));
 }
 
 #[test]
@@ -950,8 +950,8 @@ fn english_notices_contain_no_chinese() {
         s.thermal.as_mut().unwrap().state = Some(ThermalState::Critical);
         monitor.record(Ok(s), t);
         for notice in notices(&monitor, t, EN) {
-            for text in [&notice.title, &notice.body] {
-                assert!(!has_chinese(text), "{text}");
+            for text in [notice.title.clone(), notice.body()] {
+                assert!(!has_chinese(&text), "{text}");
             }
         }
     }
@@ -1024,4 +1024,63 @@ fn settings_show_notification_and_login_state() {
     }
     monitor.integrations_mut().notifications = false;
     assert_english(&monitor, "notifications off");
+}
+
+#[test]
+fn notices_name_the_heaviest_open_apps() {
+    let candidate = |name: &str, footprint_bytes, cpu_percent| Candidate {
+        pid: 1,
+        name: name.into(),
+        bundle_id: None,
+        footprint_bytes,
+        cpu_percent,
+        processes: 1,
+        active: false,
+        selected: false,
+    };
+    let mut monitor = Monitor::new(30);
+    for t in [0, 30] {
+        let mut s = at(snapshot(Pressure::Warning, 4 * GIB), t);
+        s.activity = ready(20.0 * MIB, 95.0);
+        monitor.record(Ok(s), t);
+    }
+    let mut notices = notices(&monitor, 30, ZH);
+    let (memory, cpu) = (&mut notices[0].clone(), &mut notices[1]);
+    assert_eq!((memory.group, cpu.group), (Group::Memory, Group::Cpu));
+    let apps = [
+        candidate("Browser", 3 * GIB, 150.0),
+        candidate("Editor", 2 * GIB, 40.0),
+        candidate("Mail", GIB, 10.0),
+    ];
+    memory.attribute(&apps);
+    assert!(memory
+        .body()
+        .contains("占用内存最多：Browser（3.0 GiB）、Editor（2.0 GiB）"));
+    assert!(
+        !memory.body().contains("Mail"),
+        "only the top two are named"
+    );
+    // The hint stays last, after the named apps.
+    assert!(memory.body().ends_with("最占资源的应用。"));
+    cpu.attribute(&apps[..1]);
+    assert!(cpu
+        .body()
+        .contains("处理器占用最高：Browser（150% 处理器）"));
+    // Nothing stands out: no line at all, never an empty one.
+    let before = cpu.lines.len();
+    cpu.attribute(&[]);
+    assert_eq!(cpu.lines.len(), before);
+
+    let mut english = super::notices(&monitor, 30, EN);
+    english[0].attribute(&apps);
+    assert!(english[0]
+        .body()
+        .contains("Using the most memory: Browser (3.0 GiB), Editor (2.0 GiB)"));
+    // Disk space never names apps.
+    let mut disk = Monitor::new(30);
+    disk.record(Ok(at(snapshot(Pressure::Normal, 4 * GIB), 0)), 0);
+    let mut disk = super::notices(&disk, 0, ZH);
+    assert_eq!(disk[0].focus(), None);
+    disk[0].attribute(&apps);
+    assert!(!disk[0].body().contains("Browser"));
 }
