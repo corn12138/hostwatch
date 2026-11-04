@@ -77,6 +77,7 @@ pub(super) const FOOTER: f64 = 40.0;
 pub(super) const MENU_PROCESSES: isize = 9001;
 pub(super) const MENU_SETTINGS: isize = 9002;
 pub(super) const MENU_QUIT: isize = 9003;
+pub(super) const MENU_AWAKE: isize = 9004;
 
 pub(super) fn now_unix() -> u64 {
     SystemTime::now()

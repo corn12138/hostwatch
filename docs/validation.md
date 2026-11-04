@@ -194,7 +194,8 @@ release 构建，`--interval 5`（比默认 30 秒更密，作为上限情形）
 - 真实个人文件夹（`cargo test real_home -- --ignored`，debug 构建）：20 秒内查看约 83 万项、所有顶层项目都有大小，14 个大文件夹标为至少值，3 个受保护文件夹未进入，8 个文件夹读不到；改为轮流统计前，按字母顺序只统计到点开头的文件夹，Library 等 107 项未统计。
 - 单个进程持续占满：`background_sums_unowned_processes_by_name`、`a_single_process_keeping_a_core_busy_is_a_runaway`（含 60 秒间隔仍可判断、3 分钟记录不足）与 `a_runaway_process_raises_a_processor_issue_the_whole_mac_misses`（整机 20% 时后台进程 150% 在第 9 个记录点提示、通知文案、恢复不通知、中英文）。本机手动检查（`cargo test real_background -- --ignored`）：1,089 个进程中可读 738 个；5 秒内 `python3.13` 后台进程约 116%、7.5 GB，若持续 5 分钟会被提示。
 - 加入后台进程记录后的开销（release，`menubar --interval 5`，5 分钟）：足迹 14.6–15.0 MB（不变），平均 0.26% 单核；此前一次为 0.07%。本次测量时本机另有约 116% 的 `python3.13` 后台任务，未做同条件对照，不能区分新增工作与负载波动，留待安静时复测。
-- `fmt --check`、`clippy -D warnings`、84 个测试全部通过（另有 2 个手动测试）。
+- 什么在阻止睡眠：`reads_without_error_and_skips_momentary_types`（在本机真实读取，排除 powerd 自身）与 `keeping_awake_page_and_overview_hint`（空 / 有 / 读取失败、框架名“Electron”不显示、超过 1 小时才进概览、中英文）。本机读到 ChatGPT（约 1 小时 37 分）与 Claude（约 44 分）以 NoIdleSleepAssertion 阻止睡眠，另有 sharingd（Handoff）与 coreaudiod（正在播放），与 `pmset -g assertions` 一致。
+- `fmt --check`、`clippy -D warnings`、86 个测试全部通过（另有 2 个手动测试）。
 
 ### 2. 真实 app（`dist/Hostwatch.app`，ad-hoc 签名，macOS 27.2，M3 Max）
 

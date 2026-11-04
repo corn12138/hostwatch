@@ -115,6 +115,27 @@ pub struct Thermal {
     pub battery_celsius: Option<f64>,
 }
 
+/// What a power assertion keeps from sleeping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AwakeKind {
+    /// The Mac itself (idle sleep); the screen may still turn off.
+    System,
+    /// The display, which also keeps the Mac awake.
+    Display,
+}
+
+/// One process holding the Mac or its display awake.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SleepBlocker {
+    pub pid: u32,
+    pub process: String,
+    pub kind: AwakeKind,
+    /// The name the process gave its assertion, e.g. "Playing video"; may be empty.
+    pub reason: String,
+    /// How long it has been held, when macOS says.
+    pub since_seconds: Option<u64>,
+}
+
 /// Result of one on-demand process-memory ranking pass.
 #[derive(Debug)]
 pub struct ProcessScan {

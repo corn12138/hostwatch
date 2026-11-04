@@ -695,6 +695,7 @@ fn every_route() -> Vec<Route> {
         Route::Processes,
         Route::Settings,
         Route::Space,
+        Route::Awake,
     ];
     for resource in [
         Resource::Memory,
@@ -1328,4 +1329,50 @@ fn a_runaway_process_raises_a_processor_issue_the_whole_mac_misses() {
         assert!(notices(&monitor, t, ZH).is_empty());
     }
     assert!(monitor.issues().is_empty());
+}
+
+#[test]
+fn keeping_awake_page_and_overview_hint() {
+    use crate::model::{AwakeKind, SleepBlocker};
+    let blocker = |process: &str, reason: &str, since| SleepBlocker {
+        pid: 42,
+        process: process.into(),
+        kind: AwakeKind::System,
+        reason: reason.into(),
+        since_seconds: since,
+    };
+    let mut monitor = Monitor::new(30);
+    monitor.record(Ok(normal(0)), 0);
+    monitor.record(Ok(normal(30)), 30);
+    assert!(has(&page_for(&monitor, Route::Awake), "正在读取"));
+    monitor.set_awake(30, Ok(vec![]));
+    let empty = page_for(&monitor, Route::Awake);
+    assert!(has(&empty, "没有 目前没有进程阻止睡眠"));
+    assert!(!commands(&home(&monitor, 30)).contains(&Command::Go(Route::Awake)));
+
+    monitor.set_awake(
+        30,
+        Ok(vec![
+            blocker("ChatGPT", "Electron", Some(5822)),
+            blocker("coreaudiod", "Playing", Some(600)),
+        ]),
+    );
+    let page = page_for(&monitor, Route::Awake);
+    assert!(has(
+        &page,
+        "ChatGPT (42)：阻止电脑睡眠 · 已持续约 1 小时 37 分钟"
+    ));
+    assert!(!has(&page, "“Electron”"), "framework names say nothing");
+    assert!(has(&page, "“Playing”"));
+    assert!(has(&page, "不会取消这些声明"));
+    assert!(commands(&page).contains(&Command::RefreshAwake));
+    // Only the one held over an hour reaches the overview.
+    let overview = home(&monitor, 30);
+    assert!(has(&overview, "ChatGPT 已阻止睡眠超过 1 小时 ›"));
+    assert!(!has(&overview, "coreaudiod"));
+    assert_english(&monitor, "awake");
+
+    monitor.set_awake(31, Err("系统没有返回电源断言".into()));
+    let failed = page_for(&monitor, Route::Awake);
+    assert!(has(&failed, "读不到睡眠状态"));
 }

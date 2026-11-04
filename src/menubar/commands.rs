@@ -12,7 +12,18 @@ fn take_if<T: Send + 'static>(job: &RefCell<Option<Job<T>>>, wait: bool) -> Opti
 }
 
 impl Controller {
+    pub(super) fn refresh_awake(&self) {
+        let result = platform::sleep_blockers();
+        self.ivars()
+            .monitor
+            .borrow_mut()
+            .set_awake(now_unix(), result);
+    }
+
     pub(super) fn navigate(&self, route: Route) {
+        if route == Route::Awake {
+            self.refresh_awake();
+        }
         let mut routes = self.ivars().routes.borrow_mut();
         // A new analysis replaces the one on screen instead of stacking a second optimize page.
         if matches!(route, Route::Optimize(_)) && matches!(routes.last(), Some(Route::Optimize(_)))
@@ -116,6 +127,7 @@ impl Controller {
                 self.start_space(root, now);
             }
             Command::CancelSpace => self.cancel_space(),
+            Command::RefreshAwake => self.refresh_awake(),
             Command::Reveal(path) => {
                 let result = space::reveal(self.ui().lang, &path);
                 self.ivars()
@@ -237,6 +249,11 @@ impl Controller {
             (
                 tr!(lang, "进程内存排行", "Top memory users"),
                 MENU_PROCESSES,
+                "",
+            ),
+            (
+                tr!(lang, "什么在阻止睡眠", "What keeps the Mac awake"),
+                MENU_AWAKE,
                 "",
             ),
             (

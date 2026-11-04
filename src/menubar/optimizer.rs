@@ -116,6 +116,8 @@ impl Controller {
                 at: now,
                 apps: uses,
             });
+        // Same cadence for what keeps the Mac awake: one cheap IOKit call.
+        self.refresh_awake();
     }
 
     /// Names the open apps behind fresh notices in the background (about 1 second when the

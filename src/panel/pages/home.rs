@@ -143,4 +143,5 @@ pub(crate) fn home(view: &View, blocks: &mut Vec<Block>) {
             });
         }
     }
+    awake_hint(view, blocks);
 }

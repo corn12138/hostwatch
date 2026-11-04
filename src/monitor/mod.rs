@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 
 use crate::advice::{self, Finding, Observation};
 use crate::alerts::{Engine, History, Policy, Sample};
-use crate::model::{EventKind, ProcessScan, RateStatus, Severity, Snapshot};
+use crate::model::{EventKind, ProcessScan, RateStatus, Severity, SleepBlocker, Snapshot};
 use crate::optimize::Optimizer;
 use crate::space::Space;
 pub use integrations::{Integrations, LoginItem, NoticeAccess};
@@ -149,6 +149,8 @@ pub struct Monitor {
     /// The runaway rule's newest reading, judged from the trail rather than from a sample.
     runaway: Option<Finding>,
     space: Space,
+    /// Newest read of what keeps the Mac awake, and when.
+    awake: Option<(u64, Result<Vec<SleepBlocker>, String>)>,
 }
 
 impl Monitor {
@@ -174,6 +176,7 @@ impl Monitor {
             integrations: Integrations::default(),
             trail: Trail::default(),
             runaway: None,
+            awake: None,
             space: Space::new(std::env::var_os("HOME").map_or_else(|| "/".into(), Into::into)),
         }
     }
@@ -271,6 +274,15 @@ impl Monitor {
             }
         }
         self.runaway = Some(finding);
+    }
+
+    pub fn awake(&self) -> Option<&(u64, Result<Vec<SleepBlocker>, String>)> {
+        self.awake.as_ref()
+    }
+
+    /// A read of power assertions; never touches samples or the Engine.
+    pub fn set_awake(&mut self, at: u64, result: Result<Vec<SleepBlocker>, String>) {
+        self.awake = Some((at, result));
     }
 
     pub fn space(&self) -> &Space {

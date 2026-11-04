@@ -1,5 +1,6 @@
 //! One module per popover page, plus helpers several pages share.
 
+mod awake;
 mod detail;
 mod home;
 mod issues;
@@ -9,6 +10,7 @@ mod settings;
 mod space;
 
 use super::*;
+pub(crate) use awake::{awake, awake_hint};
 pub(crate) use detail::{cpu_detail, disk_detail, memory_detail, thermal_detail};
 pub(crate) use home::home;
 pub(crate) use issues::{handling, issues};

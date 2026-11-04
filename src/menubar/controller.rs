@@ -96,6 +96,7 @@ define_class!(
             match item.tag() {
                 MENU_PROCESSES => self.handle(Command::Go(Route::Processes)),
                 MENU_SETTINGS => self.handle(Command::Go(Route::Settings)),
+                MENU_AWAKE => self.handle(Command::Go(Route::Awake)),
                 MENU_QUIT => self.handle(Command::Quit),
                 _ => {}
             }

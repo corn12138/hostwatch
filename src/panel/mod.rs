@@ -54,6 +54,8 @@ pub enum Route {
     Optimize(Group),
     /// Which folders take the most space.
     Space,
+    /// What keeps the Mac awake.
+    Awake,
 }
 
 impl Route {
@@ -70,6 +72,7 @@ impl Route {
             Route::Processes => tr!(lang, "进程排行", "Processes"),
             Route::Settings => tr!(lang, "设置", "Settings"),
             Route::Space => tr!(lang, "占用空间", "Space"),
+            Route::Awake => tr!(lang, "阻止睡眠", "Keeping awake"),
         }
     }
 }
@@ -132,6 +135,8 @@ pub enum Command {
     /// Measure what is inside this folder (an absolute path inside home).
     ScanFolder(String),
     CancelSpace,
+    /// Read power assertions again.
+    RefreshAwake,
     /// Open this folder in Finder.
     Reveal(String),
     More,
@@ -303,6 +308,7 @@ pub fn page(monitor: &Monitor, route: Route, back: Option<Route>, now: u64, ui: 
                 Route::Processes => tr!(lang, "占用内存最多的进程", "Top memory users").into(),
                 Route::Settings => tr!(lang, "设置与数据说明", "Settings and data notes").into(),
                 Route::Space => tr!(lang, "哪些文件夹占用空间", "What uses space").into(),
+                Route::Awake => tr!(lang, "什么在阻止睡眠", "What keeps the Mac awake").into(),
                 Route::Issues => tr!(lang, "需要注意的问题", "Issues needing attention").into(),
                 Route::Handling(group) => view
                     .issues
@@ -329,6 +335,7 @@ pub fn page(monitor: &Monitor, route: Route, back: Option<Route>, now: u64, ui: 
         Route::Processes => pages::processes(&view, &mut blocks),
         Route::Settings => pages::settings(&view, &mut blocks),
         Route::Space => pages::space(&view, &mut blocks),
+        Route::Awake => pages::awake(&view, &mut blocks),
     }
     let every = interval_label(lang, monitor.interval());
     Page {
