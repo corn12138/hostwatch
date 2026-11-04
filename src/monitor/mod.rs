@@ -20,7 +20,11 @@ use crate::optimize::Optimizer;
 use crate::space::Space;
 pub use integrations::{Integrations, LoginItem, NoticeAccess};
 pub use issues::{ActiveRule, Current, Group, Issue, Recovery};
-use trail::Trail;
+use trail::{Point, RunawayCheck, Trail};
+
+/// One app or background process keeping at least a core busy; judged from the trail.
+pub const RUNAWAY_RULE: &str = "runaway_process";
+const RUNAWAY_ACTION: &str = "打开活动监视器 → CPU，按「% CPU」排序确认是哪个进程；正在导出、编译或备份时属于正常，否则用它自己的退出命令退出，或重新启动该应用。";
 
 pub const INTERVAL_PRESETS: [u64; 5] = [5, 10, 30, 60, 300];
 pub const INTERVAL_RANGE: std::ops::RangeInclusive<u64> = 5..=3600;
@@ -142,6 +146,8 @@ pub struct Monitor {
     integrations: Integrations,
     /// Per-app use over the last minutes, for what changed before an issue.
     trail: Trail,
+    /// The runaway rule's newest reading, judged from the trail rather than from a sample.
+    runaway: Option<Finding>,
     space: Space,
 }
 
@@ -167,6 +173,7 @@ impl Monitor {
             optimizer: Optimizer::default(),
             integrations: Integrations::default(),
             trail: Trail::default(),
+            runaway: None,
             space: Space::new(std::env::var_os("HOME").map_or_else(|| "/".into(), Into::into)),
         }
     }
@@ -231,9 +238,39 @@ impl Monitor {
         &self.trail
     }
 
-    /// Adds per-app use; never touches samples or the Engine.
+    #[cfg(test)]
     pub fn trail_mut(&mut self) -> &mut Trail {
         &mut self.trail
+    }
+
+    /// Adds per-app use and judges the runaway rule from it. The rule goes through the Engine
+    /// like the sample rules, so it needs two abnormal points to raise and two clear to recover;
+    /// while there are too few points it is not judged at all, so it never reads as unknown.
+    pub fn record_trail(&mut self, point: Point) {
+        let at = point.at;
+        self.trail.push(point);
+        let observation = match self.trail.runaway() {
+            RunawayCheck::NotEnough => return,
+            RunawayCheck::Clear => Observation::Clear,
+            RunawayCheck::Found(found) => {
+                let top = &found[0];
+                Observation::Abnormal(
+                    Severity::Warning,
+                    format!("{} 5 分钟平均占用 {:.0}% 处理器", top.name, top.percent),
+                )
+            }
+        };
+        let finding = Finding {
+            id: RUNAWAY_RULE,
+            observation,
+            action: RUNAWAY_ACTION,
+        };
+        for event in self.engine.observe(at, std::slice::from_ref(&finding)) {
+            if event.kind != EventKind::Recovered && !self.raised.contains(&Group::Cpu) {
+                self.raised.push(Group::Cpu);
+            }
+        }
+        self.runaway = Some(finding);
     }
 
     pub fn space(&self) -> &Space {

@@ -1094,6 +1094,8 @@ fn issue_page_shows_what_rose_before_it_started() {
         name: key.into(),
         footprint,
         cpu_percent: cpu,
+        background: false,
+        active: false,
     };
     let issue_sample = |t| {
         let mut s = at(snapshot(Pressure::Warning, 300 * GIB), t);
@@ -1264,4 +1266,66 @@ fn space_page_from_scan_to_drill_down() {
     assert!(commands(&handling).contains(&Command::Go(Route::Space)));
     assert!(commands(&page_for(&disk, Route::Detail(Resource::Disk)))
         .contains(&Command::Go(Route::Space)));
+}
+
+#[test]
+fn a_runaway_process_raises_a_processor_issue_the_whole_mac_misses() {
+    use crate::monitor::trail::{AppUse, Point, EVERY};
+    let daemon = |cpu| AppUse {
+        key: "process:PerfPowerServices".into(),
+        name: "PerfPowerServices".into(),
+        footprint: 0,
+        cpu_percent: cpu,
+        background: true,
+        active: false,
+    };
+    let mut monitor = Monitor::new(30);
+    // The whole Mac reads 20% busy throughout: the saturation rule stays clear.
+    let mut t = 0;
+    monitor.record(Ok(normal(t)), t);
+    monitor.record_trail(Point {
+        at: t,
+        apps: vec![daemon(None)],
+    });
+    let mut raised_at = None;
+    for _ in 0..12 {
+        t += EVERY;
+        monitor.record(Ok(normal(t)), t);
+        monitor.record_trail(Point {
+            at: t,
+            apps: vec![daemon(Some(150.0))],
+        });
+        if raised_at.is_none() && monitor.raised().contains(&Group::Cpu) {
+            raised_at = Some(t);
+            let notice = &notices(&monitor, t, ZH)[0];
+            assert_eq!(notice.title, "有进程一直占满处理器");
+            assert!(notice
+                .body()
+                .contains("后台进程 PerfPowerServices 5 分钟平均 150% 处理器"));
+        }
+    }
+    // Judged from the 8th measured point, raised at the second abnormal one.
+    assert_eq!(raised_at, Some(9 * EVERY));
+    let issues = monitor.issues();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].group, Group::Cpu);
+    let handling = page_for(&monitor, Route::Handling(Group::Cpu));
+    assert!(has(&handling, "整台电脑还不算满"));
+    assert!(has(&handling, "单个进程持续占满："));
+    assert_eq!(monitor.health(t), Health::Issues(Severity::Warning));
+    assert_english(&monitor, "runaway");
+    let english = &notices(&monitor, t, EN);
+    assert!(english.is_empty(), "no repeat while it stays active");
+
+    // It calms down: two clear readings recover it, with no notification.
+    for _ in 0..12 {
+        t += EVERY;
+        monitor.record(Ok(normal(t)), t);
+        monitor.record_trail(Point {
+            at: t,
+            apps: vec![daemon(Some(1.0))],
+        });
+        assert!(notices(&monitor, t, ZH).is_empty());
+    }
+    assert!(monitor.issues().is_empty());
 }

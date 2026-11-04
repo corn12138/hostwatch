@@ -34,6 +34,7 @@ fn samples(table: &platform::ProcTable) -> Vec<optimize::ProcSample> {
         .map(|p| optimize::ProcSample {
             pid: p.pid,
             ppid: p.ppid,
+            name: p.name.clone(),
             footprint: p.footprint,
             cpu_ns: p.cpu_ns,
         })
@@ -79,20 +80,42 @@ impl Controller {
             None => (current.as_slice(), 1),
         };
         let measured = previous.is_some();
-        let usage = optimize::per_app(&apps, before, &current, elapsed, std::process::id());
-        let point = trail::Point {
-            at: now,
-            apps: usage
+        let own = std::process::id();
+        let mut uses: Vec<trail::AppUse> = optimize::per_app(&apps, before, &current, elapsed, own)
+            .into_iter()
+            .map(|c| trail::AppUse {
+                key: c.bundle_id.unwrap_or_else(|| c.name.clone()),
+                name: c.name,
+                footprint: c.footprint_bytes,
+                cpu_percent: measured.then_some(c.cpu_percent),
+                background: false,
+                active: c.active,
+            })
+            .collect();
+        uses.extend(
+            optimize::background(&apps, before, &current, elapsed, own)
                 .into_iter()
-                .map(|c| trail::AppUse {
-                    key: c.bundle_id.unwrap_or_else(|| c.name.clone()),
-                    name: c.name,
-                    footprint: c.footprint_bytes,
-                    cpu_percent: measured.then_some(c.cpu_percent),
+                .filter(|b| {
+                    b.cpu_percent >= trail::BACKGROUND_CPU
+                        || b.footprint_bytes >= trail::BACKGROUND_MEMORY
                 })
-                .collect(),
-        };
-        self.ivars().monitor.borrow_mut().trail_mut().push(point);
+                .map(|b| trail::AppUse {
+                    // Kept apart from an app of the same name.
+                    key: format!("process:{}", b.name),
+                    name: b.name,
+                    footprint: b.footprint_bytes,
+                    cpu_percent: measured.then_some(b.cpu_percent),
+                    background: true,
+                    active: false,
+                }),
+        );
+        self.ivars()
+            .monitor
+            .borrow_mut()
+            .record_trail(trail::Point {
+                at: now,
+                apps: uses,
+            });
     }
 
     /// Names the open apps behind fresh notices in the background (about 1 second when the

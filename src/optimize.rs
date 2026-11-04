@@ -59,12 +59,22 @@ pub struct RunningApp {
 }
 
 /// One process at one moment.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ProcSample {
     pub pid: u32,
     pub ppid: u32,
+    pub name: String,
     pub footprint: u64,
     pub cpu_ns: u64,
+}
+
+/// Processes that belong to no open app (daemons, agents, command-line tools), summed by name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Background {
+    pub name: String,
+    pub footprint_bytes: u64,
+    /// Percent of one core over the window.
+    pub cpu_percent: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,19 +132,7 @@ pub fn per_app(
         .collect();
     let parent: HashMap<u32, u32> = after.iter().map(|p| (p.pid, p.ppid)).collect();
     let earlier: HashMap<u32, u64> = before.iter().map(|p| (p.pid, p.cpu_ns)).collect();
-    let owner = |mut pid: u32| {
-        // Parent chains are short; the bound guards against a pid reused into a cycle.
-        for _ in 0..32 {
-            if offered.contains_key(&pid) {
-                return Some(pid);
-            }
-            match parent.get(&pid) {
-                Some(&ppid) if ppid > 1 && ppid != pid => pid = ppid,
-                _ => return None,
-            }
-        }
-        None
-    };
+    let owner = |pid| owner(&parent, |pid| offered.contains_key(&pid), pid);
     let mut totals: HashMap<u32, (u64, u64, usize)> = HashMap::new();
     for process in after {
         let Some(app) = owner(process.pid) else {
@@ -163,6 +161,64 @@ pub fn per_app(
                 active: app.active,
                 selected: false,
             }
+        })
+        .collect()
+}
+
+/// The app (by pid) a process belongs to: itself, or the nearest ancestor that is one.
+fn owner(parent: &HashMap<u32, u32>, is_app: impl Fn(u32) -> bool, mut pid: u32) -> Option<u32> {
+    // Parent chains are short; the bound guards against a pid reused into a cycle.
+    for _ in 0..32 {
+        if is_app(pid) {
+            return Some(pid);
+        }
+        match parent.get(&pid) {
+            Some(&ppid) if ppid > 1 && ppid != pid => pid = ppid,
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Every readable process that no regular app started (any regular app, protected ones
+/// included), summed by process name, with CPU over the window. Hostwatch itself is left out.
+pub fn background(
+    apps: &[RunningApp],
+    before: &[ProcSample],
+    after: &[ProcSample],
+    elapsed_ns: u64,
+    own_pid: u32,
+) -> Vec<Background> {
+    let regular: HashMap<u32, ()> = apps.iter().map(|a| (a.pid, ())).collect();
+    let parent: HashMap<u32, u32> = after.iter().map(|p| (p.pid, p.ppid)).collect();
+    let earlier: HashMap<u32, u64> = before.iter().map(|p| (p.pid, p.cpu_ns)).collect();
+    let mut totals: HashMap<&str, (u64, u64)> = HashMap::new();
+    for process in after {
+        if process.pid == own_pid
+            || process.name.is_empty()
+            || owner(
+                &parent,
+                |pid| regular.contains_key(&pid) || pid == own_pid,
+                process.pid,
+            )
+            .is_some()
+        {
+            continue;
+        }
+        let cpu = earlier
+            .get(&process.pid)
+            .map_or(0, |&start| process.cpu_ns.saturating_sub(start));
+        let entry = totals.entry(&process.name).or_default();
+        entry.0 += process.footprint;
+        entry.1 += cpu;
+    }
+    let elapsed = elapsed_ns.max(1) as f64;
+    totals
+        .into_iter()
+        .map(|(name, (footprint, cpu))| Background {
+            name: name.to_string(),
+            footprint_bytes: footprint,
+            cpu_percent: cpu as f64 / elapsed * 100.0,
         })
         .collect()
 }
@@ -349,6 +405,7 @@ mod tests {
         ProcSample {
             pid,
             ppid,
+            name: format!("p{pid}"),
             footprint,
             cpu_ns,
         }
@@ -403,6 +460,34 @@ mod tests {
         assert!((plan[0].cpu_percent - 150.0).abs() < 1e-9);
         assert_eq!(plan[0].processes, 3);
         assert!(plan[0].selected);
+    }
+
+    #[test]
+    fn background_sums_unowned_processes_by_name() {
+        let apps = [app(100, "Browser", "com.example.browser", false)];
+        let before = [
+            proc(100, 1, 0, 0),
+            proc(101, 100, 0, 0),
+            proc(300, 1, 0, 0),
+            proc(301, 1, 0, 0),
+            proc(9, 1, 0, 0),
+        ];
+        let mut after = [
+            proc(100, 1, GIB, SECOND),
+            // A browser helper belongs to the browser, not the background.
+            proc(101, 100, GIB, SECOND),
+            proc(300, 1, GIB, SECOND / 2),
+            proc(301, 1, GIB, SECOND),
+            // Hostwatch itself.
+            proc(9, 1, GIB, 4 * SECOND),
+        ];
+        after[2].name = "mdworker".into();
+        after[3].name = "mdworker".into();
+        let background = background(&apps, &before, &after, SECOND, 9);
+        assert_eq!(background.len(), 1);
+        assert_eq!(background[0].name, "mdworker");
+        assert_eq!(background[0].footprint_bytes, 2 * GIB);
+        assert!((background[0].cpu_percent - 150.0).abs() < 1e-9);
     }
 
     #[test]
@@ -484,5 +569,46 @@ mod tests {
         failed.begin(Group::Cpu, 1);
         failed.finish(Err("x".into()), 2);
         assert!(matches!(failed.state(), Some(Optimization::Failed { .. })));
+    }
+}
+
+/// Manual check of background-process attribution on this Mac:
+/// `cargo test real_background -- --ignored --nocapture`.
+#[cfg(all(test, target_os = "macos"))]
+#[test]
+#[ignore]
+fn real_background() {
+    let sample = |t: &crate::platform::ProcTable| -> Vec<ProcSample> {
+        t.readable
+            .iter()
+            .map(|p| ProcSample {
+                pid: p.pid,
+                ppid: p.ppid,
+                name: p.name.clone(),
+                footprint: p.footprint,
+                cpu_ns: p.cpu_ns,
+            })
+            .collect()
+    };
+    let before = crate::platform::process_table().unwrap();
+    let started = std::time::Instant::now();
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let after = crate::platform::process_table().unwrap();
+    let elapsed = started.elapsed().as_nanos() as u64;
+    // No app list in a test: every readable process counts as background here.
+    let mut all = background(&[], &sample(&before), &sample(&after), elapsed, 0);
+    all.sort_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent));
+    println!("readable {} of {}", after.readable.len(), after.listed);
+    for b in all
+        .iter()
+        .filter(|b| b.cpu_percent >= 5.0 || b.footprint_bytes >= 512 * MIB)
+        .take(12)
+    {
+        println!(
+            "{:>6.1}% {:>8.0} MiB {}",
+            b.cpu_percent,
+            b.footprint_bytes as f64 / MIB as f64,
+            b.name
+        );
     }
 }

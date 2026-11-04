@@ -1,5 +1,7 @@
-//! A short in-memory record of how much memory and processor each open app used, so an issue can
-//! say which app was rising before it started. Nothing is written to disk.
+//! A short in-memory record of how much memory and processor each open app (and each busy
+//! background process) used, so an issue can say which one was rising before it started, and a
+//! single process that keeps a core busy can be caught even when the whole Mac is not.
+//! Nothing is written to disk.
 //!
 //! The menu-bar app adds a point at most every `EVERY` seconds; `CAPACITY` keeps about ten minutes.
 //! Each point's processor figure covers the time since the previous point.
@@ -19,6 +21,15 @@ pub const MEMORY_RISE: u64 = 256 * MIB;
 /// Average processor use, percent of one core, worth naming.
 pub const CPU_BUSY: f64 = 25.0;
 const NAMED: usize = 2;
+/// Background processes are kept in a point only above one of these, to keep points small.
+pub const BACKGROUND_CPU: f64 = 5.0;
+pub const BACKGROUND_MEMORY: u64 = 512 * MIB;
+/// A runaway averages at least one full core over `LOOKBACK`...
+pub const RUNAWAY_CPU: f64 = 100.0;
+/// ...in measured points spanning at least this long, so slower sampling still qualifies...
+pub const RUNAWAY_SPAN: u64 = 210;
+/// ...and at least this many of them.
+const RUNAWAY_POINTS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppUse {
@@ -28,6 +39,26 @@ pub struct AppUse {
     pub footprint: u64,
     /// `None` on the first point, which has nothing to measure from.
     pub cpu_percent: Option<f64>,
+    /// A process no open app started (a daemon, agent or command-line tool).
+    pub background: bool,
+    /// The app in front, probably in use on purpose.
+    pub active: bool,
+}
+
+/// One app or background process that kept at least a core busy.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Runaway {
+    pub name: String,
+    pub percent: f64,
+    pub background: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RunawayCheck {
+    /// Too few measured points in the window to judge.
+    NotEnough,
+    Clear,
+    Found(Vec<Runaway>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,14 +69,17 @@ pub struct Point {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Rise {
-    /// `from` is `None` when the app was not open at the start of the window.
+    /// `from` is `None` when the app was not open at the start of the window, or a background
+    /// process was below the level a point keeps.
     Memory {
         name: String,
+        background: bool,
         from: Option<u64>,
         to: u64,
     },
     Cpu {
         name: String,
+        background: bool,
         percent: f64,
     },
 }
@@ -86,6 +120,56 @@ impl Trail {
         }
     }
 
+    /// Whether any app or background process averaged `RUNAWAY_CPU` over the last `LOOKBACK`
+    /// seconds without being in front at any point of it. Most busy first.
+    pub fn runaway(&self) -> RunawayCheck {
+        let Some(newest) = self.points.back() else {
+            return RunawayCheck::NotEnough;
+        };
+        let floor = newest.at.saturating_sub(LOOKBACK);
+        let window: Vec<&Point> = self
+            .points
+            .iter()
+            .filter(|p| p.at > floor && p.apps.iter().any(|a| a.cpu_percent.is_some()))
+            .collect();
+        let covered = window
+            .first()
+            .is_some_and(|first| newest.at.saturating_sub(first.at) >= RUNAWAY_SPAN);
+        if window.len() < RUNAWAY_POINTS || !covered {
+            return RunawayCheck::NotEnough;
+        }
+        let mut keys: Vec<(&str, &str, bool)> = Vec::new();
+        for app in window.iter().flat_map(|p| &p.apps) {
+            if !keys.iter().any(|(k, ..)| *k == app.key) {
+                keys.push((&app.key, &app.name, app.background));
+            }
+        }
+        let mut found: Vec<Runaway> = keys
+            .into_iter()
+            .filter_map(|(key, name, background)| {
+                let uses: Vec<&AppUse> = window
+                    .iter()
+                    .flat_map(|p| p.apps.iter().filter(|a| a.key == key))
+                    .collect();
+                if uses.iter().any(|a| a.active) {
+                    return None;
+                }
+                let percent =
+                    uses.iter().filter_map(|a| a.cpu_percent).sum::<f64>() / window.len() as f64;
+                (percent >= RUNAWAY_CPU).then(|| Runaway {
+                    name: name.to_string(),
+                    percent,
+                    background,
+                })
+            })
+            .collect();
+        if found.is_empty() {
+            return RunawayCheck::Clear;
+        }
+        found.sort_by(|a, b| b.percent.total_cmp(&a.percent));
+        RunawayCheck::Found(found)
+    }
+
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.points.len()
@@ -120,6 +204,7 @@ impl Trail {
                             grew as f64,
                             Rise::Memory {
                                 name: app.name.clone(),
+                                background: app.background,
                                 from: before.map(|b| b.footprint),
                                 to: app.footprint,
                             },
@@ -141,14 +226,14 @@ impl Trail {
                 if measured == 0 {
                     return Lead::NotEnough;
                 }
-                let mut keys: Vec<(&str, &str)> = Vec::new();
+                let mut keys: Vec<(&str, &str, bool)> = Vec::new();
                 for app in window.iter().flat_map(|p| &p.apps) {
-                    if !keys.iter().any(|(k, _)| *k == app.key) {
-                        keys.push((&app.key, &app.name));
+                    if !keys.iter().any(|(k, ..)| *k == app.key) {
+                        keys.push((&app.key, &app.name, app.background));
                     }
                 }
                 keys.into_iter()
-                    .filter_map(|(key, name)| {
+                    .filter_map(|(key, name, background)| {
                         // An app missing from a point used nothing then.
                         let total: f64 = window
                             .iter()
@@ -161,6 +246,7 @@ impl Trail {
                                 percent,
                                 Rise::Cpu {
                                     name: name.to_string(),
+                                    background,
                                     percent,
                                 },
                             )
@@ -192,7 +278,52 @@ mod tests {
             name: key.to_uppercase(),
             footprint,
             cpu_percent: cpu,
+            background: false,
+            active: false,
         }
+    }
+
+    #[test]
+    fn a_single_process_keeping_a_core_busy_is_a_runaway() {
+        let mut trail = Trail::default();
+        assert_eq!(trail.runaway(), RunawayCheck::NotEnough);
+        trail.push(point(0, vec![app("daemon", 0, None)]));
+        for i in 1..=8u64 {
+            let mut daemon = app("daemon", 0, Some(150.0));
+            daemon.background = true;
+            let mut editor = app("editor", 0, Some(300.0));
+            editor.active = i == 3;
+            let short = app("short", 0, Some(if i == 1 { 900.0 } else { 0.0 }));
+            trail.push(point(i * EVERY, vec![daemon, editor, short]));
+        }
+        // The editor was in front once, so it is in use on purpose. The short burst averages
+        // 900 / 8 = 112.5% and counts too, ranked below the steadier daemon.
+        match trail.runaway() {
+            RunawayCheck::Found(found) => {
+                let names: Vec<&str> = found.iter().map(|r| r.name.as_str()).collect();
+                assert_eq!(names, ["DAEMON", "SHORT"]);
+                assert!(found[0].background);
+                assert!((found[0].percent - 150.0).abs() < 1e-9);
+            }
+            other => panic!("{other:?}"),
+        }
+        // Three minutes of record are not enough.
+        let mut short = Trail::default();
+        for i in 0..=6u64 {
+            short.push(point(i * EVERY, vec![app("daemon", 0, Some(400.0))]));
+        }
+        assert_eq!(short.runaway(), RunawayCheck::NotEnough);
+        // Sampling every 60 s still covers the window with five points.
+        let mut slow = Trail::default();
+        for i in 0..=5u64 {
+            slow.push(point(i * 60, vec![app("daemon", 0, Some(400.0))]));
+        }
+        assert!(matches!(slow.runaway(), RunawayCheck::Found(_)));
+        let mut quiet = Trail::default();
+        for i in 0..=8u64 {
+            quiet.push(point(i * EVERY, vec![app("daemon", 0, Some(60.0))]));
+        }
+        assert_eq!(quiet.runaway(), RunawayCheck::Clear);
     }
 
     fn point(at: u64, apps: Vec<AppUse>) -> Point {
@@ -246,11 +377,13 @@ mod tests {
                 rises: vec![
                     Rise::Memory {
                         name: "BROWSER".into(),
+                        background: false,
                         from: Some(GIB),
                         to: 3 * GIB
                     },
                     Rise::Memory {
                         name: "NEW".into(),
+                        background: false,
                         from: None,
                         to: GIB
                     },
@@ -281,7 +414,7 @@ mod tests {
                 // spike: 60 / 3 points = 20%, below the floor.
                 assert_eq!(rises.len(), 1);
                 assert!(
-                    matches!(&rises[0], Rise::Cpu { name, percent } if name == "ENCODER" && (*percent - 170.0).abs() < 1e-9)
+                    matches!(&rises[0], Rise::Cpu { name, percent, .. } if name == "ENCODER" && (*percent - 170.0).abs() < 1e-9)
                 );
             }
             other => panic!("{other:?}"),

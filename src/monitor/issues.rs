@@ -21,7 +21,7 @@ impl Group {
     pub fn rules(self) -> &'static [&'static str] {
         match self {
             Group::Memory => &["memory_pressure", "swap_activity"],
-            Group::Cpu => &["cpu_saturation"],
+            Group::Cpu => &["cpu_saturation", super::RUNAWAY_RULE],
             Group::Disk => &["disk_space"],
             Group::Thermal => &["thermal_state"],
         }
@@ -118,7 +118,15 @@ impl Monitor {
                     .filter_map(|id| {
                         let status = self.engine.status(id)?;
                         status.active?;
-                        let current = match self.current().map(|l| l.observation(id)) {
+                        // The runaway rule is judged from the trail, not from the sample.
+                        let observed = self.current().map(|l| {
+                            if *id == super::RUNAWAY_RULE {
+                                self.runaway.as_ref().map(|f| &f.observation)
+                            } else {
+                                l.observation(id)
+                            }
+                        });
+                        let current = match observed {
                             None => Current::NoSample,
                             Some(Some(Observation::Abnormal(severity, evidence))) => {
                                 Current::Abnormal(*severity, evidence.clone())

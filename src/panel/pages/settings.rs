@@ -127,9 +127,9 @@ pub(crate) fn settings(view: &View, blocks: &mut Vec<Block>) {
         ),
         (
             "开始之前",
-            "每 30 秒记录一次已打开应用（含辅助进程）的内存和处理器用量，只在内存中保留约 10 分钟、不写入磁盘，用来说明问题开始前哪个应用在上升。",
+            "每 30 秒记录一次已打开应用（含辅助进程）和较忙后台进程的内存与处理器用量，只在内存中保留约 10 分钟、不写入磁盘；用来说明问题开始前谁在上升，并发现持续 5 分钟占满一个核心的单个进程。",
             "Before it started",
-            "Every 30 seconds Hostwatch notes each open app's memory and CPU (with its helpers), kept in memory for about 10 minutes and never written to disk, to show which app was rising before an issue.",
+            "Every 30 seconds Hostwatch notes the memory and CPU of each open app (with its helpers) and of busy background processes, kept in memory for about 10 minutes and never written to disk; it shows what was rising before an issue and catches a single process keeping a core busy for 5 minutes.",
         ),
         (
             "进程排行",

@@ -128,6 +128,7 @@ pub(crate) fn rule_name(lang: Lang, id: &str) -> &'static str {
         "memory_pressure" => tr!(lang, "内存压力", "Memory pressure"),
         "swap_activity" => tr!(lang, "交换读写", "Swap activity"),
         "cpu_saturation" => tr!(lang, "处理器使用率", "Processor usage"),
+        "runaway_process" => tr!(lang, "单个进程持续占满", "One process stays busy"),
         "disk_space" => tr!(lang, "磁盘空间", "Disk space"),
         "thermal_state" => tr!(lang, "散热", "Cooling"),
         _ => tr!(lang, "检查项", "Check"),

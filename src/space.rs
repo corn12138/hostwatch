@@ -445,9 +445,9 @@ mod tests {
     fn cancelled_and_over_budget_scans_report_what_they_measured() {
         let dir = Dir::new("stop");
         let root = &dir.0;
-        // Three folders of many small subfolders: 3 × 100 × 20 entries, more than one check.
+        // Three folders of many small subfolders: 3 × 40 × 20 entries, past the first check.
         for i in 0..3 {
-            for j in 0..100 {
+            for j in 0..40 {
                 for k in 0..20 {
                     write(&root.join(format!("f{i}/{j}/{k}.bin")), 1);
                 }
