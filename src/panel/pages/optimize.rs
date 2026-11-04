@@ -11,10 +11,16 @@ pub(crate) fn optimize(view: &View, group: Group, blocks: &mut Vec<Block>) {
             )
             .into(),
         ));
-        blocks.push(Block::Buttons(vec![Button::new(
-            open_tool_title(lang, Tool::StorageSettings),
-            Command::Open(Tool::StorageSettings),
-        )]));
+        blocks.push(Block::Buttons(vec![
+            Button::new(
+                tr!(lang, "哪些文件夹占用空间", "What uses space"),
+                Command::Go(Route::Space),
+            ),
+            Button::new(
+                open_tool_title(lang, Tool::StorageSettings),
+                Command::Open(Tool::StorageSettings),
+            ),
+        ]));
         return;
     };
     blocks.push(Block::Text(

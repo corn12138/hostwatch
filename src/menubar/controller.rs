@@ -1,9 +1,12 @@
 //! App lifecycle: status item, popover, sampling and UI timers, wake handling.
 
 use super::*;
+use crate::monitor::NoticeAccess;
+use notify::Notifier;
 
 pub(super) type ScanJob = Job<Result<ProcessScan, String>>;
 pub(super) type PlanJob = Job<Result<Vec<Candidate>, String>>;
+pub(super) type NoticeJob = Job<Vec<Notice>>;
 
 pub(super) struct Ivars {
     pub(super) monitor: RefCell<Monitor>,
@@ -24,10 +27,19 @@ pub(super) struct Ivars {
     pub(super) closed_at: Cell<Option<Instant>>,
     pub(super) scan: RefCell<Option<ScanJob>>,
     pub(super) plan: RefCell<Option<PlanJob>>,
+    /// Fresh notices waiting for the apps behind them to be named.
+    pub(super) notices: RefCell<Option<NoticeJob>>,
+    /// The folder-size scan in flight, if any.
+    pub(super) space: RefCell<Option<space::SpaceJob>>,
+    pub(super) space_ticks: Cell<u32>,
+    /// Process counters from the last trail point, for processor use since then.
+    pub(super) trail_base: RefCell<Option<(Instant, Vec<optimize::ProcSample>)>>,
     /// Checks left before pending quit requests are reported as still running.
     pub(super) quit_checks: Cell<u32>,
     /// Interface language, re-resolved whenever the popover opens.
     pub(super) ui: Cell<Ui>,
+    /// Set only when running as Hostwatch.app.
+    pub(super) notifier: OnceCell<Notifier>,
 }
 
 define_class!(
@@ -84,6 +96,7 @@ define_class!(
             match item.tag() {
                 MENU_PROCESSES => self.handle(Command::Go(Route::Processes)),
                 MENU_SETTINGS => self.handle(Command::Go(Route::Settings)),
+                MENU_AWAKE => self.handle(Command::Go(Route::Awake)),
                 MENU_QUIT => self.handle(Command::Quit),
                 _ => {}
             }
@@ -141,8 +154,13 @@ impl Controller {
             closed_at: Cell::new(None),
             scan: RefCell::new(None),
             plan: RefCell::new(None),
+            notices: RefCell::new(None),
+            trail_base: RefCell::new(None),
+            space: RefCell::new(None),
+            space_ticks: Cell::new(0),
             quit_checks: Cell::new(0),
             ui: Cell::new(prefs::current_ui(prefs::load_choice())),
+            notifier: OnceCell::new(),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -194,6 +212,19 @@ impl Controller {
                     None,
                 );
         }
+        let notifications = prefs::load_notifications();
+        this.ivars()
+            .monitor
+            .borrow_mut()
+            .integrations_mut()
+            .notifications = notifications;
+        if let Some(notifier) = Notifier::new(this) {
+            if notifications {
+                notifier.authorize();
+            }
+            let _ = this.ivars().notifier.set(notifier);
+        }
+        this.sync_integrations();
         this.refresh_status();
         this.sample();
         this.schedule();
@@ -202,10 +233,72 @@ impl Controller {
     pub(super) fn sample(&self) {
         autoreleasepool(|_| {
             let result = self.ivars().collector.borrow_mut().collect(false);
-            self.ivars().monitor.borrow_mut().record(result, now_unix());
+            let now = now_unix();
+            self.ivars().monitor.borrow_mut().record(result, now);
+            self.record_trail(now);
+            self.post_notices(now);
             self.refresh_status();
             self.render(false);
         });
+    }
+
+    /// Announces issues the Engine just raised or escalated. Skipped while the popover is open,
+    /// since the same issue is already on screen.
+    fn post_notices(&self, now: u64) {
+        if self.ivars().notifier.get().is_none() || self.shown() {
+            return;
+        }
+        let notices = panel::notices(&self.ivars().monitor.borrow(), now, self.ui());
+        if !notices.is_empty() {
+            self.attribute_and_post(notices);
+        }
+    }
+
+    pub(super) fn post_now(&self, notices: &[Notice]) {
+        if let Some(notifier) = self.ivars().notifier.get() {
+            for notice in notices {
+                notifier.post(notice);
+            }
+        }
+    }
+
+    /// Copies notification permission and login-item state from macOS into the monitor.
+    pub(super) fn sync_integrations(&self) {
+        let access = self
+            .ivars()
+            .notifier
+            .get()
+            .map_or(NoticeAccess::Unavailable, Notifier::access);
+        let login = notify::login_item();
+        let mut monitor = self.ivars().monitor.borrow_mut();
+        let state = monitor.integrations_mut();
+        state.access = access;
+        state.login = login;
+    }
+
+    /// Opens the popover on an issue's handling page, e.g. after a notification is clicked.
+    pub(super) fn show_issue(&self, group: Group) {
+        if !self.shown() {
+            self.toggle_popover();
+        }
+        let route = if self
+            .ivars()
+            .monitor
+            .borrow()
+            .issues()
+            .iter()
+            .any(|i| i.group == group)
+        {
+            Route::Handling(group)
+        } else {
+            // Already recovered: the overview says so.
+            Route::Home
+        };
+        *self.ivars().routes.borrow_mut() = vec![Route::Home];
+        if route != Route::Home {
+            self.navigate(route);
+        }
+        self.render(false);
     }
 
     pub(super) fn refresh_status(&self) {
@@ -354,6 +447,10 @@ impl Controller {
             self.refresh_status();
         }
         self.ivars().monitor.borrow_mut().clear_tool_feedback();
+        // Permission may have changed in System Settings; the answer shows on the next render.
+        if let Some(notifier) = self.ivars().notifier.get() {
+            notifier.refresh();
+        }
         self.render(true);
         let Some(button) = self.ivars().status_item.get().and_then(|i| i.button(mtm)) else {
             return;

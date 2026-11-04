@@ -694,6 +694,8 @@ fn every_route() -> Vec<Route> {
         Route::Issues,
         Route::Processes,
         Route::Settings,
+        Route::Space,
+        Route::Awake,
     ];
     for resource in [
         Resource::Memory,
@@ -886,4 +888,491 @@ fn settings_offer_language_choices_in_their_own_language() {
     let settings = page_in(&monitor, Route::Settings, ui);
     assert!(has(&settings, "Follow system (中文)"));
     assert!(has(&settings, "Quit Hostwatch"));
+}
+
+#[test]
+fn notices_follow_engine_transitions_only() {
+    let issue_sample = |t| {
+        let mut s = at(snapshot(Pressure::Warning, 4 * GIB), t);
+        s.activity = ready(20.0 * MIB, 95.0);
+        s
+    };
+    let groups = |n: &[Notice]| n.iter().map(|n| n.group).collect::<Vec<_>>();
+    let mut monitor = Monitor::new(30);
+    // Critical swap and disk space are raised on the first sample; pressure and CPU need two.
+    monitor.record(Ok(issue_sample(0)), 0);
+    let first = notices(&monitor, 0, ZH);
+    assert_eq!(groups(&first), [Group::Memory, Group::Disk]);
+    assert_eq!(first[0].title, "电脑正在频繁使用交换");
+    assert!(first[0].body().contains("交换读写合计 20.0 MiB/s"));
+    assert!(first[0].body().contains("一键优化"));
+    // Pressure joins the memory issue (one notification per group replaces the older one).
+    monitor.record(Ok(issue_sample(30)), 30);
+    let second = notices(&monitor, 30, ZH);
+    assert_eq!(groups(&second), [Group::Memory, Group::Cpu]);
+    assert_eq!(second[0].title, "内存不足，电脑可能变慢");
+    // Still abnormal, nothing new: no repeat.
+    monitor.record(Ok(issue_sample(60)), 60);
+    assert!(notices(&monitor, 60, ZH).is_empty());
+    // A failed sample announces nothing; recovery is not announced either.
+    monitor.record(Err("x".into()), 90);
+    assert!(monitor.raised().is_empty());
+    for t in [120, 150] {
+        monitor.record(Ok(normal(t)), t);
+        assert!(notices(&monitor, t, ZH).is_empty());
+    }
+    // Turned off: nothing, even for a fresh critical issue.
+    let mut off = Monitor::new(30);
+    off.integrations_mut().notifications = false;
+    off.record(Ok(issue_sample(0)), 0);
+    assert!(notices(&off, 0, ZH).is_empty());
+}
+
+#[test]
+fn disk_space_notifies_only_when_critical() {
+    let mut monitor = Monitor::new(30);
+    for t in [0, 30] {
+        monitor.record(Ok(at(snapshot(Pressure::Normal, 100 * GIB), t)), t);
+    }
+    assert_eq!(monitor.raised(), [Group::Disk]);
+    assert!(notices(&monitor, 30, ZH).is_empty());
+    monitor.record(Ok(at(snapshot(Pressure::Normal, 4 * GIB), 60)), 60);
+    let escalated = notices(&monitor, 60, ZH);
+    assert_eq!(escalated.len(), 1);
+    assert_eq!(escalated[0].title, "磁盘空间严重不足");
+    assert!(!escalated[0].body().contains("一键优化"));
+}
+
+#[test]
+fn english_notices_contain_no_chinese() {
+    let mut monitor = Monitor::new(30);
+    for t in [0, 30] {
+        let mut s = at(snapshot(Pressure::Critical, 4 * GIB), t);
+        s.activity = ready(20.0 * MIB, 95.0);
+        s.thermal.as_mut().unwrap().state = Some(ThermalState::Critical);
+        monitor.record(Ok(s), t);
+        for notice in notices(&monitor, t, EN) {
+            for text in [notice.title.clone(), notice.body()] {
+                assert!(!has_chinese(&text), "{text}");
+            }
+        }
+    }
+}
+
+#[test]
+fn settings_show_notification_and_login_state() {
+    let section = |page: &Page, command: fn(bool) -> Command| {
+        page.blocks
+            .iter()
+            .find_map(|b| match b {
+                Block::Choices(c) if c.iter().any(|b| b.command == command(true)) => Some(
+                    c.iter()
+                        .map(|b| (b.title.clone(), b.primary, b.enabled))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let mut monitor = Monitor::new(30);
+    // From a terminal: shown, but cannot be changed.
+    let settings = page_for(&monitor, Route::Settings);
+    assert_eq!(
+        section(&settings, Command::SetNotifications),
+        [
+            ("开".to_string(), true, false),
+            ("关".to_string(), false, false)
+        ]
+    );
+    assert!(has(&settings, "只有从 Hostwatch.app 打开时才能发通知"));
+    assert!(!section(&settings, Command::SetOpenAtLogin)[0].2);
+
+    let state = monitor.integrations_mut();
+    state.access = NoticeAccess::Denied;
+    state.login = LoginItem::NeedsApproval;
+    let settings = page_for(&monitor, Route::Settings);
+    assert!(commands(&settings).contains(&Command::Open(Tool::NotificationSettings)));
+    assert!(commands(&settings).contains(&Command::Open(Tool::LoginItemSettings)));
+    assert_eq!(
+        section(&settings, Command::SetOpenAtLogin),
+        [
+            ("开".to_string(), true, true),
+            ("关".to_string(), false, true)
+        ]
+    );
+    assert!(has(&settings, "在“登录项”设置中被关闭"));
+
+    let state = monitor.integrations_mut();
+    state.access = NoticeAccess::Allowed;
+    state.login = LoginItem::Off;
+    state.login_error = Some("Operation not permitted".into());
+    let settings = page_for(&monitor, Route::Settings);
+    assert!(!commands(&settings).contains(&Command::Open(Tool::NotificationSettings)));
+    assert!(has(&settings, "同一问题 10 分钟内不重复"));
+    assert!(has(&settings, "上次更改失败：Operation not permitted"));
+    assert!(section(&settings, Command::SetOpenAtLogin)[1].1);
+
+    // Every state reads in English too.
+    for (access, login) in [
+        (NoticeAccess::Unknown, LoginItem::On),
+        (NoticeAccess::NotAsked, LoginItem::Off),
+        (NoticeAccess::Denied, LoginItem::NeedsApproval),
+        (NoticeAccess::Allowed, LoginItem::Unavailable),
+    ] {
+        let state = monitor.integrations_mut();
+        state.access = access;
+        state.login = login;
+        assert_english(&monitor, &format!("{access:?} {login:?}"));
+    }
+    monitor.integrations_mut().notifications = false;
+    assert_english(&monitor, "notifications off");
+}
+
+#[test]
+fn notices_name_the_heaviest_open_apps() {
+    let candidate = |name: &str, footprint_bytes, cpu_percent| Candidate {
+        pid: 1,
+        name: name.into(),
+        bundle_id: None,
+        footprint_bytes,
+        cpu_percent,
+        processes: 1,
+        active: false,
+        selected: false,
+    };
+    let mut monitor = Monitor::new(30);
+    for t in [0, 30] {
+        let mut s = at(snapshot(Pressure::Warning, 4 * GIB), t);
+        s.activity = ready(20.0 * MIB, 95.0);
+        monitor.record(Ok(s), t);
+    }
+    let mut notices = notices(&monitor, 30, ZH);
+    let (memory, cpu) = (&mut notices[0].clone(), &mut notices[1]);
+    assert_eq!((memory.group, cpu.group), (Group::Memory, Group::Cpu));
+    let apps = [
+        candidate("Browser", 3 * GIB, 150.0),
+        candidate("Editor", 2 * GIB, 40.0),
+        candidate("Mail", GIB, 10.0),
+    ];
+    memory.attribute(&apps);
+    assert!(memory
+        .body()
+        .contains("占用内存最多：Browser（3.0 GiB）、Editor（2.0 GiB）"));
+    assert!(
+        !memory.body().contains("Mail"),
+        "only the top two are named"
+    );
+    // The hint stays last, after the named apps.
+    assert!(memory.body().ends_with("最占资源的应用。"));
+    cpu.attribute(&apps[..1]);
+    assert!(cpu
+        .body()
+        .contains("处理器占用最高：Browser（150% 处理器）"));
+    // Nothing stands out: no line at all, never an empty one.
+    let before = cpu.lines.len();
+    cpu.attribute(&[]);
+    assert_eq!(cpu.lines.len(), before);
+
+    let mut english = super::notices(&monitor, 30, EN);
+    english[0].attribute(&apps);
+    assert!(english[0]
+        .body()
+        .contains("Using the most memory: Browser (3.0 GiB), Editor (2.0 GiB)"));
+    // Disk space never names apps.
+    let mut disk = Monitor::new(30);
+    disk.record(Ok(at(snapshot(Pressure::Normal, 4 * GIB), 0)), 0);
+    let mut disk = super::notices(&disk, 0, ZH);
+    assert_eq!(disk[0].focus(), None);
+    disk[0].attribute(&apps);
+    assert!(!disk[0].body().contains("Browser"));
+}
+
+#[test]
+fn issue_page_shows_what_rose_before_it_started() {
+    use crate::monitor::trail::{AppUse, Point};
+    let app = |key: &str, footprint, cpu| AppUse {
+        key: key.into(),
+        name: key.into(),
+        footprint,
+        cpu_percent: cpu,
+        background: false,
+        active: false,
+    };
+    let issue_sample = |t| {
+        let mut s = at(snapshot(Pressure::Warning, 300 * GIB), t);
+        s.activity = ready(20.0 * MIB, 95.0);
+        s
+    };
+    // No record yet: says so instead of guessing.
+    let mut empty = Monitor::new(30);
+    for t in [30, 60] {
+        empty.record(Ok(issue_sample(t)), t);
+    }
+    let handling = page_for(&empty, Route::Handling(Group::Memory));
+    assert!(has(&handling, "记录还不够"));
+    assert!(!has(
+        &page_for(&empty, Route::Handling(Group::Disk)),
+        "开始之前"
+    ));
+
+    let mut monitor = Monitor::new(30);
+    monitor.trail_mut().push(Point {
+        at: 0,
+        apps: vec![app("Browser", GIB, None), app("Encoder", 0, None)],
+    });
+    monitor.trail_mut().push(Point {
+        at: 30,
+        apps: vec![
+            app("Browser", 3 * GIB, Some(10.0)),
+            app("Encoder", 0, Some(180.0)),
+        ],
+    });
+    for t in [30, 60] {
+        monitor.record(Ok(issue_sample(t)), t);
+    }
+    let memory = page_for(&monitor, Route::Handling(Group::Memory));
+    assert!(has(&memory, "开始之前"));
+    assert!(has(&memory, "Browser：1.0 GiB → 3.0 GiB（+2.0 GiB）"));
+    assert!(has(&memory, "只在内存中保留，不写入磁盘"));
+    let cpu = page_for(&monitor, Route::Handling(Group::Cpu));
+    assert!(has(&cpu, "Encoder：平均 180% 处理器"));
+    assert!(!has(&cpu, "Browser："), "10% CPU is not worth naming");
+    // The swap notification raised at 30 carries the same finding.
+    let mut first = Monitor::new(30);
+    first.trail_mut().push(Point {
+        at: 0,
+        apps: vec![app("Browser", GIB, None)],
+    });
+    first.trail_mut().push(Point {
+        at: 30,
+        apps: vec![app("Browser", 3 * GIB, Some(10.0))],
+    });
+    first.record(Ok(issue_sample(30)), 30);
+    let notice = &notices(&first, 30, ZH)[0];
+    assert!(notice
+        .body()
+        .contains("开始前上升最多：Browser：1.0 GiB → 3.0 GiB（+2.0 GiB）"));
+    assert_english(&monitor, "trail");
+    assert_english(&empty, "trail empty");
+}
+
+#[test]
+fn space_page_from_scan_to_drill_down() {
+    use crate::space::{Entry, Kind, Report, Space, Stop};
+    use std::path::PathBuf;
+    let home = PathBuf::from("/Users/me");
+    let mut monitor = Monitor::new(30);
+    *monitor.space_mut() = Space::new(home.clone());
+    let start = page_for(&monitor, Route::Space);
+    assert!(commands(&start).contains(&Command::ScanFolder("/Users/me".into())));
+    assert!(has(&start, "不打开、不移动、不删除任何文件"));
+
+    assert!(monitor.space_mut().begin(home.clone(), 5));
+    monitor.space_mut().progress(4096);
+    let scanning = page_for(&monitor, Route::Space);
+    assert!(has(&scanning, "正在统计 ~…已查看 4096 项"));
+    assert!(commands(&scanning).contains(&Command::CancelSpace));
+
+    let entry = |name: &str, bytes, kind, partial| Entry {
+        name: name.into(),
+        path: home.join(name),
+        bytes,
+        kind,
+        partial,
+    };
+    monitor.space_mut().finish(
+        Ok(Report {
+            root: home.clone(),
+            entries: vec![
+                entry("Library", 40 * 1_000_000_000, Kind::Folder, true),
+                entry("Movies", 12 * 1_000_000_000, Kind::Folder, false),
+                entry("big.dmg", 3 * 1_000_000_000, Kind::File, false),
+                entry("Documents", 0, Kind::Protected, true),
+            ],
+            total: 55 * 1_000_000_000,
+            items: 120_000,
+            unreadable: 3,
+            guarded: 2,
+            unfinished: 0,
+            stopped: Some(Stop::Budget),
+        }),
+        25,
+    );
+    let done = page_for(&monitor, Route::Space);
+    assert!(has(&done, "至少 55.0 GB"));
+    let rows: Vec<(String, String, Option<Command>)> = done
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            Block::Processes(rows) => Some(
+                rows.iter()
+                    .map(|r| (r.name.clone(), r.size.clone(), r.command.clone()))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (
+                "Library ›".to_string(),
+                "≥ 40.0 GB".to_string(),
+                Some(Command::ScanFolder("/Users/me/Library".into()))
+            ),
+            (
+                "Movies ›".to_string(),
+                "12.0 GB".to_string(),
+                Some(Command::ScanFolder("/Users/me/Movies".into()))
+            ),
+            ("big.dmg".to_string(), "3.0 GB".to_string(), None),
+            (
+                "Documents ›".to_string(),
+                "点按统计".to_string(),
+                Some(Command::ScanFolder("/Users/me/Documents".into()))
+            ),
+        ]
+    );
+    assert!(has(&done, "统计到 20 秒上限时停止"));
+    assert!(has(&done, "受 macOS 保护，默认不统计"));
+    assert!(has(&done, "3 个文件夹读不到"));
+    // Home has no "up one level"; a subfolder does, and never above home.
+    assert!(!has(&done, "上一层"));
+    assert!(commands(&done).contains(&Command::Reveal("/Users/me".into())));
+    assert_english(&monitor, "space done");
+
+    assert!(monitor.space_mut().begin(home.join("Library"), 30));
+    monitor.space_mut().finish(
+        Ok(Report {
+            root: home.join("Library"),
+            entries: vec![],
+            total: 0,
+            items: 1,
+            unreadable: 0,
+            guarded: 0,
+            unfinished: 0,
+            stopped: None,
+        }),
+        31,
+    );
+    let library = page_for(&monitor, Route::Space);
+    assert!(has(&library, "这个文件夹是空的"));
+    assert!(commands(&library).contains(&Command::ScanFolder("/Users/me".into())));
+    assert!(has(&library, "~/Library"));
+
+    // Disk issues lead here first.
+    let mut disk = Monitor::new(30);
+    disk.record(Ok(at(snapshot(Pressure::Normal, 4 * GIB), 0)), 0);
+    let handling = page_for(&disk, Route::Handling(Group::Disk));
+    assert!(commands(&handling).contains(&Command::Go(Route::Space)));
+    assert!(commands(&page_for(&disk, Route::Detail(Resource::Disk)))
+        .contains(&Command::Go(Route::Space)));
+}
+
+#[test]
+fn a_runaway_process_raises_a_processor_issue_the_whole_mac_misses() {
+    use crate::monitor::trail::{AppUse, Point, EVERY};
+    let daemon = |cpu| AppUse {
+        key: "process:PerfPowerServices".into(),
+        name: "PerfPowerServices".into(),
+        footprint: 0,
+        cpu_percent: cpu,
+        background: true,
+        active: false,
+    };
+    let mut monitor = Monitor::new(30);
+    // The whole Mac reads 20% busy throughout: the saturation rule stays clear.
+    let mut t = 0;
+    monitor.record(Ok(normal(t)), t);
+    monitor.record_trail(Point {
+        at: t,
+        apps: vec![daemon(None)],
+    });
+    let mut raised_at = None;
+    for _ in 0..12 {
+        t += EVERY;
+        monitor.record(Ok(normal(t)), t);
+        monitor.record_trail(Point {
+            at: t,
+            apps: vec![daemon(Some(150.0))],
+        });
+        if raised_at.is_none() && monitor.raised().contains(&Group::Cpu) {
+            raised_at = Some(t);
+            let notice = &notices(&monitor, t, ZH)[0];
+            assert_eq!(notice.title, "有进程一直占满处理器");
+            assert!(notice
+                .body()
+                .contains("后台进程 PerfPowerServices 5 分钟平均 150% 处理器"));
+        }
+    }
+    // Judged from the 8th measured point, raised at the second abnormal one.
+    assert_eq!(raised_at, Some(9 * EVERY));
+    let issues = monitor.issues();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].group, Group::Cpu);
+    let handling = page_for(&monitor, Route::Handling(Group::Cpu));
+    assert!(has(&handling, "整台电脑还不算满"));
+    assert!(has(&handling, "单个进程持续占满："));
+    assert_eq!(monitor.health(t), Health::Issues(Severity::Warning));
+    assert_english(&monitor, "runaway");
+    let english = &notices(&monitor, t, EN);
+    assert!(english.is_empty(), "no repeat while it stays active");
+
+    // It calms down: two clear readings recover it, with no notification.
+    for _ in 0..12 {
+        t += EVERY;
+        monitor.record(Ok(normal(t)), t);
+        monitor.record_trail(Point {
+            at: t,
+            apps: vec![daemon(Some(1.0))],
+        });
+        assert!(notices(&monitor, t, ZH).is_empty());
+    }
+    assert!(monitor.issues().is_empty());
+}
+
+#[test]
+fn keeping_awake_page_and_overview_hint() {
+    use crate::model::{AwakeKind, SleepBlocker};
+    let blocker = |process: &str, reason: &str, since| SleepBlocker {
+        pid: 42,
+        process: process.into(),
+        kind: AwakeKind::System,
+        reason: reason.into(),
+        since_seconds: since,
+    };
+    let mut monitor = Monitor::new(30);
+    monitor.record(Ok(normal(0)), 0);
+    monitor.record(Ok(normal(30)), 30);
+    assert!(has(&page_for(&monitor, Route::Awake), "正在读取"));
+    monitor.set_awake(30, Ok(vec![]));
+    let empty = page_for(&monitor, Route::Awake);
+    assert!(has(&empty, "没有 目前没有进程阻止睡眠"));
+    assert!(!commands(&home(&monitor, 30)).contains(&Command::Go(Route::Awake)));
+
+    monitor.set_awake(
+        30,
+        Ok(vec![
+            blocker("ChatGPT", "Electron", Some(5822)),
+            blocker("coreaudiod", "Playing", Some(600)),
+        ]),
+    );
+    let page = page_for(&monitor, Route::Awake);
+    assert!(has(
+        &page,
+        "ChatGPT (42)：阻止电脑睡眠 · 已持续约 1 小时 37 分钟"
+    ));
+    assert!(!has(&page, "“Electron”"), "framework names say nothing");
+    assert!(has(&page, "“Playing”"));
+    assert!(has(&page, "不会取消这些声明"));
+    assert!(commands(&page).contains(&Command::RefreshAwake));
+    // Only the one held over an hour reaches the overview.
+    let overview = home(&monitor, 30);
+    assert!(has(&overview, "ChatGPT 已阻止睡眠超过 1 小时 ›"));
+    assert!(!has(&overview, "coreaudiod"));
+    assert_english(&monitor, "awake");
+
+    monitor.set_awake(31, Err("系统没有返回电源断言".into()));
+    let failed = page_for(&monitor, Route::Awake);
+    assert!(has(&failed, "读不到睡眠状态"));
 }

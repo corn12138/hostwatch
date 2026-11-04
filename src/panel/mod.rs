@@ -8,6 +8,7 @@
 
 mod chart;
 mod format;
+mod notices;
 mod pages;
 mod reading;
 mod summary;
@@ -18,16 +19,18 @@ use crate::advice::{GB, GIB, MIB};
 use crate::alerts::Sample;
 pub use crate::lang::{Lang, LanguageChoice, Ui};
 use crate::model::{Pressure, RateStatus, Severity, ThermalState};
+use crate::monitor::trail::{self, Lead, Rise};
 use crate::monitor::{
-    unmeasured, ActiveRule, Current, Group, Health, Issue, Latest, Mark, Monitor, Processes,
-    Recovery, Tool, INTERVAL_PRESETS,
+    unmeasured, ActiveRule, Current, Group, Health, Issue, Latest, LoginItem, Mark, Monitor,
+    NoticeAccess, Processes, Recovery, Tool, INTERVAL_PRESETS,
 };
-use crate::optimize::{Focus, Optimization, QuitState};
+use crate::optimize::{Candidate, Focus, Optimization, QuitState};
 
 pub use chart::{cpu_chart, memory_chart, swap_chart, temperature_chart};
 use format::*;
 pub use format::{clock, interval_label, percent, rate, span};
 pub(crate) use format::{tool_label, tool_path};
+pub use notices::{notices, Notice};
 use reading::*;
 use summary::*;
 
@@ -49,6 +52,10 @@ pub enum Route {
     Settings,
     /// Ask the apps behind an issue to quit normally.
     Optimize(Group),
+    /// Which folders take the most space.
+    Space,
+    /// What keeps the Mac awake.
+    Awake,
 }
 
 impl Route {
@@ -64,6 +71,8 @@ impl Route {
             Route::Handling(_) => tr!(lang, "处理方法", "What to do"),
             Route::Processes => tr!(lang, "进程排行", "Processes"),
             Route::Settings => tr!(lang, "设置", "Settings"),
+            Route::Space => tr!(lang, "占用空间", "Space"),
+            Route::Awake => tr!(lang, "阻止睡眠", "Keeping awake"),
         }
     }
 }
@@ -121,6 +130,15 @@ pub enum Command {
     /// Ask the selected apps to quit normally.
     QuitSelected,
     SetLanguage(LanguageChoice),
+    SetNotifications(bool),
+    SetOpenAtLogin(bool),
+    /// Measure what is inside this folder (an absolute path inside home).
+    ScanFolder(String),
+    CancelSpace,
+    /// Read power assertions again.
+    RefreshAwake,
+    /// Open this folder in Finder.
+    Reveal(String),
     More,
     Quit,
 }
@@ -195,6 +213,8 @@ pub struct ProcessRow {
     pub name: String,
     pub size: String,
     pub fraction: f64,
+    /// Makes the whole row a button, e.g. to open a folder.
+    pub command: Option<Command>,
 }
 
 /// One checkbox row.
@@ -287,6 +307,8 @@ pub fn page(monitor: &Monitor, route: Route, back: Option<Route>, now: u64, ui: 
             title: match route {
                 Route::Processes => tr!(lang, "占用内存最多的进程", "Top memory users").into(),
                 Route::Settings => tr!(lang, "设置与数据说明", "Settings and data notes").into(),
+                Route::Space => tr!(lang, "哪些文件夹占用空间", "What uses space").into(),
+                Route::Awake => tr!(lang, "什么在阻止睡眠", "What keeps the Mac awake").into(),
                 Route::Issues => tr!(lang, "需要注意的问题", "Issues needing attention").into(),
                 Route::Handling(group) => view
                     .issues
@@ -312,6 +334,8 @@ pub fn page(monitor: &Monitor, route: Route, back: Option<Route>, now: u64, ui: 
         Route::Handling(group) => pages::handling(&view, group, &mut blocks),
         Route::Processes => pages::processes(&view, &mut blocks),
         Route::Settings => pages::settings(&view, &mut blocks),
+        Route::Space => pages::space(&view, &mut blocks),
+        Route::Awake => pages::awake(&view, &mut blocks),
     }
     let every = interval_label(lang, monitor.interval());
     Page {

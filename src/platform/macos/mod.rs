@@ -1,3 +1,4 @@
+mod awake;
 mod disk;
 mod processes;
 mod thermal;
@@ -11,6 +12,7 @@ use std::{
 use super::Collector;
 use crate::activity::{self, Counters, Stamp};
 use crate::model::{Memory, MemoryBreakdown, Pressure, Snapshot, SourceStatus, Swap};
+pub use awake::sleep_blockers;
 pub use processes::{process_table, scan_processes, ProcTable, RankBy};
 use thermal::ThermalReader;
 

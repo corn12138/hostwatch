@@ -12,7 +12,18 @@ fn take_if<T: Send + 'static>(job: &RefCell<Option<Job<T>>>, wait: bool) -> Opti
 }
 
 impl Controller {
+    pub(super) fn refresh_awake(&self) {
+        let result = platform::sleep_blockers();
+        self.ivars()
+            .monitor
+            .borrow_mut()
+            .set_awake(now_unix(), result);
+    }
+
     pub(super) fn navigate(&self, route: Route) {
+        if route == Route::Awake {
+            self.refresh_awake();
+        }
         let mut routes = self.ivars().routes.borrow_mut();
         // A new analysis replaces the one on screen instead of stacking a second optimize page.
         if matches!(route, Route::Optimize(_)) && matches!(routes.last(), Some(Route::Optimize(_)))
@@ -45,6 +56,7 @@ impl Controller {
                 };
                 if !paused {
                     // Fresh baseline: a rate spanning the whole pause would not describe "now".
+                    *self.ivars().trail_base.borrow_mut() = None;
                     match platform::collector() {
                         Ok(collector) => *self.ivars().collector.borrow_mut() = collector,
                         Err(error) => self.ivars().monitor.borrow_mut().record(Err(error), now),
@@ -90,6 +102,38 @@ impl Controller {
                 prefs::save_choice(choice);
                 self.ivars().ui.set(prefs::current_ui(choice));
                 self.refresh_status();
+            }
+            Command::SetNotifications(on) => {
+                prefs::save_notifications(on);
+                self.ivars()
+                    .monitor
+                    .borrow_mut()
+                    .integrations_mut()
+                    .notifications = on;
+                if let (true, Some(notifier)) = (on, self.ivars().notifier.get()) {
+                    notifier.authorize();
+                }
+            }
+            Command::SetOpenAtLogin(on) => {
+                let error = notify::set_login_item(on).err();
+                self.ivars()
+                    .monitor
+                    .borrow_mut()
+                    .integrations_mut()
+                    .login_error = error;
+            }
+            Command::ScanFolder(root) => {
+                self.navigate(Route::Space);
+                self.start_space(root, now);
+            }
+            Command::CancelSpace => self.cancel_space(),
+            Command::RefreshAwake => self.refresh_awake(),
+            Command::Reveal(path) => {
+                let result = space::reveal(self.ui().lang, &path);
+                self.ivars()
+                    .monitor
+                    .borrow_mut()
+                    .note_open(Tool::Finder, result, now);
             }
             Command::More => {
                 self.show_more();
@@ -169,7 +213,20 @@ impl Controller {
                 .finish(result, now);
             changed = true;
         }
-        let idle = self.ivars().scan.borrow().is_none() && self.ivars().plan.borrow().is_none();
+        let notices = take_if(&self.ivars().notices, wait);
+        if let Some(job) = notices {
+            // A job that ended without a result (it panicked) has nothing left to post.
+            if let Some(notices) = job.finish() {
+                self.post_now(&notices);
+            }
+        }
+        if self.collect_space(wait, now) {
+            changed = true;
+        }
+        let idle = self.ivars().scan.borrow().is_none()
+            && self.ivars().plan.borrow().is_none()
+            && self.ivars().notices.borrow().is_none()
+            && self.ivars().space.borrow().is_none();
         if idle {
             if let Some(timer) = self.ivars().poll_timer.borrow_mut().take() {
                 timer.invalidate();
@@ -192,6 +249,11 @@ impl Controller {
             (
                 tr!(lang, "进程内存排行", "Top memory users"),
                 MENU_PROCESSES,
+                "",
+            ),
+            (
+                tr!(lang, "什么在阻止睡眠", "What keeps the Mac awake"),
+                MENU_AWAKE,
                 "",
             ),
             (
@@ -241,6 +303,8 @@ impl Controller {
                 timer.invalidate();
             }
         }
+        // A folder scan can run for seconds; ask it to stop before waiting for it.
+        self.cancel_space();
         self.collect_jobs(true);
         if let Some(popover) = self.ivars().popover.get() {
             popover.close();
@@ -270,6 +334,21 @@ pub(super) fn open_tool(lang: Lang, tool: Tool) -> Result<(), String> {
                 "The Storage settings address is invalid"
             ))?
         }
+        Tool::NotificationSettings => NSURL::URLWithString(ns_string!(NOTIFICATION_SETTINGS_URL))
+            .ok_or(tr!(
+            lang,
+            "通知设置地址无效",
+            "The Notifications settings address is invalid"
+        ))?,
+        Tool::Finder => NSURL::fileURLWithPath(&NSString::from_str(
+            &std::env::var("HOME").unwrap_or_else(|_| "/".into()),
+        )),
+        Tool::LoginItemSettings => NSURL::URLWithString(ns_string!(LOGIN_ITEM_SETTINGS_URL))
+            .ok_or(tr!(
+                lang,
+                "登录项设置地址无效",
+                "The Login Items settings address is invalid"
+            ))?,
     };
     if workspace.openURL(&url) {
         Ok(())
@@ -288,3 +367,9 @@ pub(super) fn open_tool(lang: Lang, tool: Tool) -> Result<(), String> {
 /// System Settings → General → Storage (macOS 13+).
 pub(super) const STORAGE_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.settings.Storage";
+/// System Settings → Notifications → Hostwatch (macOS 13+).
+pub(super) const NOTIFICATION_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=io.github.corn12138.hostwatch";
+/// System Settings → General → Login Items (macOS 13+).
+pub(super) const LOGIN_ITEM_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.LoginItems-Settings.extension";

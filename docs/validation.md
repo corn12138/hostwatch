@@ -181,6 +181,29 @@ release 构建，`--interval 5`（比默认 30 秒更密，作为上限情形）
 
 移除 sysinfo 依赖；release 二进制 755 KB。RSS ≤ 40 MiB 目标仍未满足，足迹预算仍待确认。
 
+## 系统通知与登录时打开（2026-11-02）
+
+### 1. 自动化（固定样本，`src/panel/tests.rs`）
+
+- `notices_follow_engine_transitions_only`：只在告警引擎新发出或升级时产生通知；严重交换与严重磁盘首个样本即通知，压力与处理器需第 2 个样本；持续异常不重复；采集失败与恢复不通知；关闭后不通知。
+- `disk_space_notifies_only_when_critical`：磁盘「提醒」级不通知，升级为「严重」时通知且不提「一键优化」。
+- `english_notices_contain_no_chinese`、`settings_show_notification_and_login_state`：通知与设置页在不可用 / 未询问 / 拒绝 / 允许、登录项关 / 开 / 待批准 / 失败各状态下的文案、按钮与英文覆盖。
+- `notices_name_the_heaviest_open_apps`：内存 / 处理器通知写出最重的 2 个应用（按一键优化同一 `optimize::plan` 排序），无突出应用时不加行，磁盘空间不点名，中英文各一。
+- `trail` 三个单元测试与 `issue_page_shows_what_rose_before_it_started`：30 秒节流与 10 分钟容量；内存按开始前 5 分钟窗口比较增长（≥ 256 MiB，含期间新打开的应用），处理器按窗口平均（≥ 25%，短暂尖峰不点名）；记录不足、无明显上升时的说明；通知附同一行；中英文覆盖。
+- `space` 四个单元测试（临时目录）与 `space_page_from_scan_to_drill_down`：分配大小、硬链接只算一次、不跟随替身；受保护文件夹列出但不进入、点选后才统计；停止 / 超时后各文件夹都有部分大小并标为至少值；只在个人文件夹内、不重叠；页面逐层点进、上一层、在访达中显示、中英文覆盖。
+- 真实个人文件夹（`cargo test real_home -- --ignored`，debug 构建）：20 秒内查看约 83 万项、所有顶层项目都有大小，14 个大文件夹标为至少值，3 个受保护文件夹未进入，8 个文件夹读不到；改为轮流统计前，按字母顺序只统计到点开头的文件夹，Library 等 107 项未统计。
+- 单个进程持续占满：`background_sums_unowned_processes_by_name`、`a_single_process_keeping_a_core_busy_is_a_runaway`（含 60 秒间隔仍可判断、3 分钟记录不足）与 `a_runaway_process_raises_a_processor_issue_the_whole_mac_misses`（整机 20% 时后台进程 150% 在第 9 个记录点提示、通知文案、恢复不通知、中英文）。本机手动检查（`cargo test real_background -- --ignored`）：1,089 个进程中可读 738 个；5 秒内 `python3.13` 后台进程约 116%、7.5 GB，若持续 5 分钟会被提示。
+- 加入后台进程记录后的开销（release，`menubar --interval 5`，5 分钟）：足迹 14.6–15.0 MB（不变），平均 0.26% 单核；此前一次为 0.07%。本次测量时本机另有约 116% 的 `python3.13` 后台任务，未做同条件对照，不能区分新增工作与负载波动，留待安静时复测。
+- 什么在阻止睡眠：`reads_without_error_and_skips_momentary_types`（在本机真实读取，排除 powerd 自身）与 `keeping_awake_page_and_overview_hint`（空 / 有 / 读取失败、框架名“Electron”不显示、超过 1 小时才进概览、中英文）。本机读到 ChatGPT（约 1 小时 37 分）与 Claude（约 44 分）以 NoIdleSleepAssertion 阻止睡眠，另有 sharingd（Handoff）与 coreaudiod（正在播放），与 `pmset -g assertions` 一致。
+- `fmt --check`、`clippy -D warnings`、86 个测试全部通过（另有 2 个手动测试）。
+
+### 2. 真实 app（`dist/Hostwatch.app`，ad-hoc 签名，macOS 27.2，M3 Max）
+
+- 已验证：启动后创建通知中心并以 `alert` 选项请求权限；系统日志（`usernoted`）显示权限请求已登记并呈现给用户。同一时刻 `SMAppService` 状态读数为 3（NotFound，界面显示为「关」）。
+- 未验证：用户点按「允许 / 不允许」后的状态显示、通知实际送达（含应用点名约 1 秒的延迟）与点按跳转、登录项登记 / 取消 / 待批准（本环境无法点击面板，也无屏幕录制权限）。
+- 「开始之前」开销（release，`menubar --interval 5`，面板关闭，5 分钟）：物理内存足迹 14.8–15.1 MB、平均 0.07% 单核；此前同条件无记录时为 14.5–14.7 MB、0.13%，即约多 0.3–0.4 MB，处理器差异在波动范围内。单次读取进程表实测约 3 ms 处理器时间（约 1,100 个进程）。真实问题页上的点名结果未在实机上看到。
+- 未验证：真实高负载触发通知。从本会话启动的负载进程被限制在约 37.5% 总 CPU，launchd 临时任务同样拿不到 CPU；当时 WindowServer 与 `avconferenced` 正忙，为避免干扰未继续加压。
+
 ## 未验证
 
 - 30 分钟 / 8 小时长时间运行与实际睡眠唤醒（睡眠判定只在固定样本中验证）。
@@ -191,4 +214,4 @@ release 构建，`--interval 5`（比默认 30 秒更密，作为上限情形）
 - 系统设置是否停在「储存空间」页；状态栏图标在各状态下的实际外观（SF Symbols 模板图）。
 - 非 ad-hoc 签名、公证、下载后 Gatekeeper 流程的实测。
 - 菜单栏受控的 30 分钟空闲（本轮 30 分钟中途有未受控 GUI 事件）/ 8 小时运行、睡眠唤醒（计时器在睡眠后的行为）、受控的多次进程排行；系统设置是否落在「储存空间」页。
-- 磁盘 I/O、Windows、通知、.app 打包与签名分发均未实现。
+- 磁盘 I/O、Windows、公证分发均未实现；通知送达、点按跳转与登录项只在固定样本中验证（见上一节）。

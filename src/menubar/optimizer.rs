@@ -1,5 +1,6 @@
 //! One-click optimization on the AppKit side: list the person's open apps, measure them in the
-//! background, then send normal quit requests (like ⌘Q) to the apps the person confirmed.
+//! background, then send normal quit requests (like ⌘Q) to the apps the person confirmed. The same
+//! measurement names the apps behind fresh notifications.
 
 use super::*;
 
@@ -33,6 +34,7 @@ fn samples(table: &platform::ProcTable) -> Vec<optimize::ProcSample> {
         .map(|p| optimize::ProcSample {
             pid: p.pid,
             ppid: p.ppid,
+            name: p.name.clone(),
             footprint: p.footprint,
             cpu_ns: p.cpu_ns,
         })
@@ -50,6 +52,125 @@ fn exited(pid: u32) -> bool {
 }
 
 impl Controller {
+    /// Adds a point to the per-app trail when one is due (every `trail::EVERY` seconds). Reading
+    /// the process table takes a few milliseconds, so it runs inline; a failed read skips the point.
+    pub(super) fn record_trail(&self, now: u64) {
+        {
+            let monitor = self.ivars().monitor.borrow();
+            if monitor.current().is_none() || !monitor.trail().due(now) {
+                return;
+            }
+        }
+        let Ok(table) = platform::process_table() else {
+            return;
+        };
+        let taken = Instant::now();
+        let current = samples(&table);
+        let apps = running_apps();
+        let previous = self
+            .ivars()
+            .trail_base
+            .borrow_mut()
+            .replace((taken, current.clone()));
+        let (before, elapsed) = match &previous {
+            Some((at, before)) => (
+                before.as_slice(),
+                taken.duration_since(*at).as_nanos() as u64,
+            ),
+            None => (current.as_slice(), 1),
+        };
+        let measured = previous.is_some();
+        let own = std::process::id();
+        let mut uses: Vec<trail::AppUse> = optimize::per_app(&apps, before, &current, elapsed, own)
+            .into_iter()
+            .map(|c| trail::AppUse {
+                key: c.bundle_id.unwrap_or_else(|| c.name.clone()),
+                name: c.name,
+                footprint: c.footprint_bytes,
+                cpu_percent: measured.then_some(c.cpu_percent),
+                background: false,
+                active: c.active,
+            })
+            .collect();
+        uses.extend(
+            optimize::background(&apps, before, &current, elapsed, own)
+                .into_iter()
+                .filter(|b| {
+                    b.cpu_percent >= trail::BACKGROUND_CPU
+                        || b.footprint_bytes >= trail::BACKGROUND_MEMORY
+                })
+                .map(|b| trail::AppUse {
+                    // Kept apart from an app of the same name.
+                    key: format!("process:{}", b.name),
+                    name: b.name,
+                    footprint: b.footprint_bytes,
+                    cpu_percent: measured.then_some(b.cpu_percent),
+                    background: true,
+                    active: false,
+                }),
+        );
+        self.ivars()
+            .monitor
+            .borrow_mut()
+            .record_trail(trail::Point {
+                at: now,
+                apps: uses,
+            });
+        // Same cadence for what keeps the Mac awake: one cheap IOKit call.
+        self.refresh_awake();
+    }
+
+    /// Names the open apps behind fresh notices in the background (about 1 second when the
+    /// processor is involved), then posts them. Notices are posted unnamed when there is nothing
+    /// to name or the analysis cannot start; a second batch never waits behind the first.
+    pub(super) fn attribute_and_post(&self, notices: Vec<Notice>) {
+        let named = notices.iter().any(|n| n.focus().is_some());
+        if !named || self.ivars().notices.borrow().is_some() {
+            self.post_now(&notices);
+            return;
+        }
+        let apps = running_apps();
+        let own = std::process::id();
+        let unnamed = notices.clone();
+        let job = Job::spawn("hostwatch-notices", move || {
+            let mut notices = notices;
+            let cpu = notices
+                .iter()
+                .any(|n| n.focus() == Some(optimize::Focus::Cpu));
+            let Ok(before) = platform::process_table() else {
+                return notices;
+            };
+            let started = Instant::now();
+            let after = if cpu {
+                std::thread::sleep(Duration::from_millis(optimize::CPU_WINDOW_MS));
+                match platform::process_table() {
+                    Ok(after) => after,
+                    Err(_) => return notices,
+                }
+            } else {
+                platform::ProcTable {
+                    readable: before.readable.clone(),
+                    listed: before.listed,
+                }
+            };
+            let elapsed = started.elapsed().as_nanos() as u64;
+            let (before, after) = (samples(&before), samples(&after));
+            for notice in &mut notices {
+                if let Some(focus) = notice.focus() {
+                    notice.attribute(&optimize::plan(focus, &apps, &before, &after, elapsed, own));
+                }
+            }
+            notices
+        });
+        match job {
+            Ok(job) => {
+                *self.ivars().notices.borrow_mut() = Some(job);
+                self.poll_jobs();
+            }
+            Err(_) => self.post_now(&unnamed),
+        }
+    }
+
     pub(super) fn start_plan(&self, group: Group, now: u64) {
         let Some(focus) = optimize::Focus::for_group(group) else {
             return;

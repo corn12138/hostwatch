@@ -128,6 +128,7 @@ pub(crate) fn rule_name(lang: Lang, id: &str) -> &'static str {
         "memory_pressure" => tr!(lang, "内存压力", "Memory pressure"),
         "swap_activity" => tr!(lang, "交换读写", "Swap activity"),
         "cpu_saturation" => tr!(lang, "处理器使用率", "Processor usage"),
+        "runaway_process" => tr!(lang, "单个进程持续占满", "One process stays busy"),
         "disk_space" => tr!(lang, "磁盘空间", "Disk space"),
         "thermal_state" => tr!(lang, "散热", "Cooling"),
         _ => tr!(lang, "检查项", "Check"),
@@ -138,6 +139,9 @@ pub(crate) fn tool_label(lang: Lang, tool: Tool) -> &'static str {
     match tool {
         Tool::ActivityMonitor => tr!(lang, "活动监视器", "Activity Monitor"),
         Tool::StorageSettings => tr!(lang, "“储存空间”设置", "Storage settings"),
+        Tool::NotificationSettings => tr!(lang, "“通知”设置", "Notifications settings"),
+        Tool::LoginItemSettings => tr!(lang, "“登录项”设置", "Login Items settings"),
+        Tool::Finder => tr!(lang, "访达", "Finder"),
     }
 }
 
@@ -152,6 +156,21 @@ pub(crate) fn tool_path(lang: Lang, tool: Tool) -> &'static str {
             lang,
             "苹果菜单 › 系统设置 › 通用 › 储存空间",
             "Apple menu › System Settings › General › Storage"
+        ),
+        Tool::NotificationSettings => tr!(
+            lang,
+            "苹果菜单 › 系统设置 › 通知 › Hostwatch",
+            "Apple menu › System Settings › Notifications › Hostwatch"
+        ),
+        Tool::LoginItemSettings => tr!(
+            lang,
+            "苹果菜单 › 系统设置 › 通用 › 登录项与扩展",
+            "Apple menu › System Settings › General › Login Items & Extensions"
+        ),
+        Tool::Finder => tr!(
+            lang,
+            "程序坞 › 访达，再前往该文件夹",
+            "Dock › Finder, then go to the folder"
         ),
     }
 }

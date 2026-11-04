@@ -173,6 +173,7 @@ pub(crate) fn issue_status(lang: Lang, issue: &Issue) -> (Tone, &'static str) {
         Group::Memory if has("swap_activity") => tr!(lang, "交换频繁", "Swapping"),
         Group::Memory if critical => tr!(lang, "压力严重", "Critical pressure"),
         Group::Memory => tr!(lang, "压力偏高", "High pressure"),
+        Group::Cpu if !has("cpu_saturation") => tr!(lang, "有进程占满", "A process stays busy"),
         Group::Cpu => tr!(lang, "持续很高", "Stays high"),
         Group::Disk if critical => tr!(lang, "空间严重不足", "Critically low"),
         Group::Disk => tr!(lang, "空间不足", "Low"),

@@ -5,17 +5,26 @@
 //! this state by `panel`, so every transition is testable without a window server. Issue grouping
 //! and Engine-owned recovery live in `issues`.
 
+mod integrations;
 mod issues;
 #[cfg(test)]
 pub mod tests;
+pub mod trail;
 
 use std::collections::VecDeque;
 
 use crate::advice::{self, Finding, Observation};
 use crate::alerts::{Engine, History, Policy, Sample};
-use crate::model::{ProcessScan, RateStatus, Severity, Snapshot};
+use crate::model::{EventKind, ProcessScan, RateStatus, Severity, SleepBlocker, Snapshot};
 use crate::optimize::Optimizer;
+use crate::space::Space;
+pub use integrations::{Integrations, LoginItem, NoticeAccess};
 pub use issues::{ActiveRule, Current, Group, Issue, Recovery};
+use trail::{Point, RunawayCheck, Trail};
+
+/// One app or background process keeping at least a core busy; judged from the trail.
+pub const RUNAWAY_RULE: &str = "runaway_process";
+const RUNAWAY_ACTION: &str = "打开活动监视器 → CPU，按「% CPU」排序确认是哪个进程；正在导出、编译或备份时属于正常，否则用它自己的退出命令退出，或重新启动该应用。";
 
 pub const INTERVAL_PRESETS: [u64; 5] = [5, 10, 30, 60, 300];
 pub const INTERVAL_RANGE: std::ops::RangeInclusive<u64> = 5..=3600;
@@ -25,6 +34,10 @@ pub const INTERVAL_RANGE: std::ops::RangeInclusive<u64> = 5..=3600;
 pub enum Tool {
     ActivityMonitor,
     StorageSettings,
+    NotificationSettings,
+    LoginItemSettings,
+    /// A folder shown in Finder.
+    Finder,
 }
 
 /// Recorded evidence about time between samples. Only these explain a gap; a long timestamp
@@ -125,9 +138,19 @@ pub struct Monitor {
     cadence_from: Option<u64>,
     /// Groups whose last active rule recovered in the newest sample.
     recovered: Option<(u64, Vec<Group>)>,
+    /// Groups the Engine raised or escalated in the newest sample; what notifications announce.
+    raised: Vec<Group>,
     processes: Processes,
     tool: Option<ToolFeedback>,
     optimizer: Optimizer,
+    integrations: Integrations,
+    /// Per-app use over the last minutes, for what changed before an issue.
+    trail: Trail,
+    /// The runaway rule's newest reading, judged from the trail rather than from a sample.
+    runaway: Option<Finding>,
+    space: Space,
+    /// Newest read of what keeps the Mac awake, and when.
+    awake: Option<(u64, Result<Vec<SleepBlocker>, String>)>,
 }
 
 impl Monitor {
@@ -146,9 +169,15 @@ impl Monitor {
             consecutive_failures: 0,
             cadence_from: None,
             recovered: None,
+            raised: Vec::new(),
             processes: Processes::NotRead,
             tool: None,
             optimizer: Optimizer::default(),
+            integrations: Integrations::default(),
+            trail: Trail::default(),
+            runaway: None,
+            awake: None,
+            space: Space::new(std::env::var_os("HOME").map_or_else(|| "/".into(), Into::into)),
         }
     }
 
@@ -195,6 +224,76 @@ impl Monitor {
         self.recovered.as_ref().map(|(at, g)| (*at, g.as_slice()))
     }
 
+    pub fn raised(&self) -> &[Group] {
+        &self.raised
+    }
+
+    pub fn integrations(&self) -> &Integrations {
+        &self.integrations
+    }
+
+    /// Notification and login-item state; never touches samples or the Engine.
+    pub fn integrations_mut(&mut self) -> &mut Integrations {
+        &mut self.integrations
+    }
+
+    pub fn trail(&self) -> &Trail {
+        &self.trail
+    }
+
+    #[cfg(test)]
+    pub fn trail_mut(&mut self) -> &mut Trail {
+        &mut self.trail
+    }
+
+    /// Adds per-app use and judges the runaway rule from it. The rule goes through the Engine
+    /// like the sample rules, so it needs two abnormal points to raise and two clear to recover;
+    /// while there are too few points it is not judged at all, so it never reads as unknown.
+    pub fn record_trail(&mut self, point: Point) {
+        let at = point.at;
+        self.trail.push(point);
+        let observation = match self.trail.runaway() {
+            RunawayCheck::NotEnough => return,
+            RunawayCheck::Clear => Observation::Clear,
+            RunawayCheck::Found(found) => {
+                let top = &found[0];
+                Observation::Abnormal(
+                    Severity::Warning,
+                    format!("{} 5 分钟平均占用 {:.0}% 处理器", top.name, top.percent),
+                )
+            }
+        };
+        let finding = Finding {
+            id: RUNAWAY_RULE,
+            observation,
+            action: RUNAWAY_ACTION,
+        };
+        for event in self.engine.observe(at, std::slice::from_ref(&finding)) {
+            if event.kind != EventKind::Recovered && !self.raised.contains(&Group::Cpu) {
+                self.raised.push(Group::Cpu);
+            }
+        }
+        self.runaway = Some(finding);
+    }
+
+    pub fn awake(&self) -> Option<&(u64, Result<Vec<SleepBlocker>, String>)> {
+        self.awake.as_ref()
+    }
+
+    /// A read of power assertions; never touches samples or the Engine.
+    pub fn set_awake(&mut self, at: u64, result: Result<Vec<SleepBlocker>, String>) {
+        self.awake = Some((at, result));
+    }
+
+    pub fn space(&self) -> &Space {
+        &self.space
+    }
+
+    /// Folder scans; never touch samples or the Engine.
+    pub fn space_mut(&mut self) -> &mut Space {
+        &mut self.space
+    }
+
     pub fn processes(&self) -> &Processes {
         &self.processes
     }
@@ -215,6 +314,7 @@ impl Monitor {
     pub fn record(&mut self, result: Result<Snapshot, String>, now: u64) {
         self.cadence_from = Some(now);
         self.recovered = None;
+        self.raised.clear();
         let snapshot = match result {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -237,7 +337,16 @@ impl Monitor {
         self.prune_marks();
         let before = self.active_groups();
         let findings = advice::assess(&snapshot);
-        self.engine.observe(at, &findings);
+        for event in self.engine.observe(at, &findings) {
+            if event.kind == EventKind::Recovered {
+                continue;
+            }
+            if let Some(group) = Group::of_rule(event.id) {
+                if !self.raised.contains(&group) {
+                    self.raised.push(group);
+                }
+            }
+        }
         let after = self.active_groups();
         let recovered: Vec<Group> = before.into_iter().filter(|g| !after.contains(g)).collect();
         if !recovered.is_empty() {

@@ -8,6 +8,8 @@
 //! collector so rates get a new baseline. The on-demand process scan and the optimization analysis
 //! run as short background jobs that the main thread polls and joins, including at quit. Actions
 //! open read-only system tools or, after the person confirms, ask chosen apps to quit normally.
+//! From Hostwatch.app, newly raised issues are also posted as notifications (`notify`), and the
+//! app can register itself to open at login.
 //!
 //! Layout: `controller` (app lifecycle, timers, popover), `commands` (what each control does),
 //! `render` (page → view tree), `kit`, `blocks` and `rows` (a small reusable view kit: labels,
@@ -19,10 +21,12 @@ mod controller;
 mod draw;
 mod jobs;
 mod kit;
+mod notify;
 mod optimizer;
 mod prefs;
 mod render;
 mod rows;
+mod space;
 mod views;
 
 use std::cell::{Cell, OnceCell, RefCell};
@@ -53,9 +57,11 @@ use objc2_foundation::{
 
 use crate::lang::{Lang, LanguageChoice, Ui};
 use crate::model::ProcessScan;
-use crate::monitor::{Group, Health, Monitor, Tool};
+use crate::monitor::{trail, Group, Health, Monitor, Tool};
 use crate::optimize::{self, Candidate, QuitOutcome, QuitState, RunningApp};
-use crate::panel::{self, Block, Button, Chart, Command, Footer, Graphic, ProcessRow, Route, Tone};
+use crate::panel::{
+    self, Block, Button, Chart, Command, Footer, Graphic, Notice, ProcessRow, Route, Tone,
+};
 use crate::platform::{self, Collector};
 
 use controller::Controller;
@@ -71,6 +77,7 @@ pub(super) const FOOTER: f64 = 40.0;
 pub(super) const MENU_PROCESSES: isize = 9001;
 pub(super) const MENU_SETTINGS: isize = 9002;
 pub(super) const MENU_QUIT: isize = 9003;
+pub(super) const MENU_AWAKE: isize = 9004;
 
 pub(super) fn now_unix() -> u64 {
     SystemTime::now()

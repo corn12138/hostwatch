@@ -90,6 +90,15 @@ pub(crate) fn reading(
             }
             _ => fallback(),
         },
+        "runaway_process" => match view_runaway(monitor) {
+            Some(runaways) => runaways
+                .iter()
+                .take(2)
+                .map(|r| runaway_line(lang, r))
+                .collect::<Vec<_>>()
+                .join(tr!(lang, "；", "; ")),
+            None => fallback(),
+        },
         "thermal_state" => {
             let level = match (lang, critical) {
                 (Lang::Zh, true) => "系统散热等级严重",
@@ -110,6 +119,29 @@ pub(crate) fn reading(
     }
 }
 
+/// Runaways in the newest trail reading, if any.
+fn view_runaway(monitor: &Monitor) -> Option<Vec<trail::Runaway>> {
+    match monitor.trail().runaway() {
+        trail::RunawayCheck::Found(found) => Some(found),
+        _ => None,
+    }
+}
+
+pub(crate) fn runaway_line(lang: Lang, runaway: &trail::Runaway) -> String {
+    let name = display_name(lang, &runaway.name);
+    let percent = runaway.percent;
+    match (runaway.background, lang) {
+        (true, Lang::Zh) => format!("后台进程 {name} 5 分钟平均 {percent:.0}% 处理器"),
+        (false, Lang::Zh) => format!("{name} 5 分钟平均 {percent:.0}% 处理器（不在前台）"),
+        (true, Lang::En) => {
+            format!("background process {name} averaged {percent:.0}% CPU for 5 minutes")
+        }
+        (false, Lang::En) => {
+            format!("{name} averaged {percent:.0}% CPU for 5 minutes while not in front")
+        }
+    }
+}
+
 pub(crate) fn issue_title(lang: Lang, issue: &Issue) -> &'static str {
     let has = |id| issue.rules.iter().any(|r| r.id == id);
     let critical = issue.severity >= Severity::Critical;
@@ -126,6 +158,11 @@ pub(crate) fn issue_title(lang: Lang, issue: &Issue) -> &'static str {
             (Lang::En, false) => "Memory is getting tight",
         },
         Group::Memory => tr!(lang, "电脑正在频繁使用交换", "The Mac is swapping heavily"),
+        Group::Cpu if !has("cpu_saturation") => tr!(
+            lang,
+            "有进程一直占满处理器",
+            "A process keeps the processor busy"
+        ),
         Group::Cpu => tr!(lang, "处理器持续繁忙", "The processor stays busy"),
         Group::Disk => match (lang, critical) {
             (Lang::Zh, true) => "磁盘空间严重不足",
@@ -159,6 +196,11 @@ pub(crate) fn issue_reason(lang: Lang, issue: &Issue) -> &'static str {
             lang,
             "系统正在持续把内存数据写到磁盘再读回（交换），会让操作变慢。只是“有交换文件”而没有持续读写时，不需要处理。",
             "macOS keeps moving memory to disk and back (swapping), which slows things down. A swap file without ongoing reads and writes needs no action."
+        ),
+        Group::Cpu if !has("cpu_saturation") => tr!(
+            lang,
+            "整台电脑还不算满，但有一个应用或后台进程已持续 5 分钟占满至少一个核心。它会让风扇变响、耗电变快，也常常是程序卡住或陷入循环的迹象；导出、编译或备份期间则属于正常。",
+            "The Mac as a whole is not maxed out, but one app or background process has kept at least a full core busy for 5 minutes. That makes fans louder and drains the battery, and it is often a sign of a stuck or looping program; during an export, build or backup it is normal."
         ),
         Group::Cpu => tr!(
             lang,
@@ -239,6 +281,11 @@ pub(crate) fn rule_rule(lang: Lang, id: &str) -> &'static str {
             lang,
             "≥ 90% 连续 2 个样本提示",
             "≥ 90% for 2 samples in a row"
+        ),
+        "runaway_process" => tr!(
+            lang,
+            "某个应用或后台进程 5 分钟平均 ≥ 100%（满一个核心）且期间不在前台，连续 2 次记录提示",
+            "An app or background process averages ≥ 100% (a full core) over 5 minutes while not in front, at 2 records in a row"
         ),
         "thermal_state" => tr!(
             lang,
@@ -355,4 +402,140 @@ pub(crate) fn recovery_done(issue: &Issue) -> u32 {
             .unwrap_or(0),
         Recovery::Ongoing => 0,
     }
+}
+
+/// What the per-app trail shows for the minutes before an issue began; `None` for disk space,
+/// which has no app to name, or when the start is unknown.
+pub(crate) fn lead(view: &View, issue: &Issue) -> Option<Lead> {
+    let focus = Focus::for_group(issue.group)?;
+    Some(view.monitor.trail().lead(focus, issue.since?))
+}
+
+pub(crate) fn rise_line(lang: Lang, rise: &Rise) -> String {
+    let label = |name: &str, background: bool| {
+        let name = display_name(lang, name);
+        match (background, lang) {
+            (true, Lang::Zh) => format!("{name}（后台进程）"),
+            (true, Lang::En) => format!("{name} (background process)"),
+            (false, _) => name,
+        }
+    };
+    match rise {
+        Rise::Memory {
+            name,
+            background,
+            from: Some(from),
+            to,
+        } => {
+            let (name, grew) = (label(name, *background), size(to.saturating_sub(*from)));
+            let (from, to) = (size(*from), size(*to));
+            tr!(
+                lang,
+                format!("{name}：{from} → {to}（+{grew}）"),
+                format!("{name}: {from} → {to} (+{grew})")
+            )
+        }
+        Rise::Memory {
+            name,
+            background: false,
+            from: None,
+            to,
+        } => {
+            let (name, to) = (display_name(lang, name), size(*to));
+            tr!(
+                lang,
+                format!("{name}：期间新打开，现占 {to}"),
+                format!("{name}: opened meanwhile, now {to}")
+            )
+        }
+        Rise::Memory {
+            name,
+            background: true,
+            from: None,
+            to,
+        } => {
+            let (name, to) = (label(name, true), size(*to));
+            let floor = size(trail::BACKGROUND_MEMORY);
+            tr!(
+                lang,
+                format!("{name}：此前低于 {floor}，现占 {to}"),
+                format!("{name}: under {floor} before, now {to}")
+            )
+        }
+        Rise::Cpu {
+            name,
+            background,
+            percent,
+        } => {
+            let name = label(name, *background);
+            tr!(
+                lang,
+                format!("{name}：平均 {percent:.0}% 处理器"),
+                format!("{name}: {percent:.0}% CPU on average")
+            )
+        }
+    }
+}
+
+/// The Lead as lines for the issue page: what rose, then how it was measured.
+pub(crate) fn lead_blocks(view: &View, issue: &Issue, blocks: &mut Vec<Block>) {
+    let Some(lead) = lead(view, issue) else {
+        return;
+    };
+    let lang = view.lang;
+    let memory = issue.group == Group::Memory;
+    blocks.push(Block::Heading(
+        tr!(lang, "开始之前", "Before it started").into(),
+    ));
+    let every = trail::EVERY;
+    match lead {
+        Lead::NotEnough => blocks.push(Block::Text(tr!(
+            lang,
+            format!("记录还不够：Hostwatch 每 {every} 秒记录一次已打开应用和较忙后台进程的用量，只保留最近约 10 分钟；这个问题开始前的记录不足以比较。"),
+            format!("Not enough record yet: Hostwatch notes open apps' and busy background processes' use every {every} seconds and keeps about the last 10 minutes; there is too little before this issue began to compare.")
+        ))),
+        Lead::Quiet { from, to } => {
+            let (from, to) = (hm(from), hm(to));
+            blocks.push(Block::Text(if memory {
+                tr!(
+                    lang,
+                    format!("{from}–{to} 之间没有哪个应用或后台进程的内存增加 256 MiB 以上；可能是多个进程一起增长，或来自读不到的系统进程。"),
+                    format!("Between {from} and {to}, no app or background process grew by 256 MiB or more; several may have grown together, or it comes from system processes Hostwatch cannot read.")
+                )
+            } else {
+                tr!(
+                    lang,
+                    format!("{from}–{to} 之间没有哪个应用或后台进程平均占用 25% 以上处理器；可能是许多进程一起，或来自读不到的系统进程。"),
+                    format!("Between {from} and {to}, no app or background process averaged 25% CPU or more; it may be many processes together, or system processes Hostwatch cannot read.")
+                )
+            }));
+        }
+        Lead::Rose { from, to, rises } => {
+            let (from, to) = (hm(from), hm(to));
+            blocks.push(Block::Text(if memory {
+                tr!(
+                    lang,
+                    format!("{from}–{to} 之间内存增长最多的（应用含辅助进程）："),
+                    format!("Grew the most in memory between {from} and {to} (apps include their helpers):")
+                )
+            } else {
+                tr!(
+                    lang,
+                    format!("{from}–{to} 之间处理器占用最高的（应用含辅助进程）："),
+                    format!("Used the most CPU between {from} and {to} (apps include their helpers):")
+                )
+            }));
+            blocks.push(Block::Bullets(
+                rises.iter().map(|r| rise_line(lang, r)).collect(),
+            ));
+        }
+    }
+    blocks.push(Block::Note(
+        tr!(
+            lang,
+            "只在内存中保留，不写入磁盘；后台进程只在处理器 ≥ 5% 或内存 ≥ 512 MiB 时记录，读不到的系统进程不在其中。上升不等于就是原因，可结合“一键优化”的当前占用判断。",
+            "Kept in memory only, never written to disk; background processes are noted only above 5% CPU or 512 MiB, and system processes Hostwatch cannot read are missing. Rising is not proof of cause; compare with the current use shown by Optimize."
+        )
+        .into(),
+    ));
 }

@@ -15,6 +15,7 @@ impl Controller {
         ) else {
             return;
         };
+        self.sync_integrations();
         autoreleasepool(|_| {
             let mtm = self.mtm();
             let now = now_unix();

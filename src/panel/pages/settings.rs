@@ -51,6 +51,8 @@ pub(crate) fn settings(view: &View, blocks: &mut Vec<Block>) {
         },
         Command::TogglePause,
     )]));
+    notifications(view, blocks);
+    open_at_login(view, blocks);
     // Each option is written in its own language so it stays recognizable either way.
     blocks.push(Block::Heading(
         tr!(lang, "语言 · Language", "Language · 语言").into(),
@@ -86,7 +88,7 @@ pub(crate) fn settings(view: &View, blocks: &mut Vec<Block>) {
     blocks.push(Block::Heading(
         tr!(lang, "数据说明", "About the data").into(),
     ));
-    let pairs: [(&str, &str, &str, &str); 8] = [
+    let pairs: [(&str, &str, &str, &str); 9] = [
         (
             "内存",
             "“已用”= 应用 + 联动 + 压缩内存，不含文件缓存。“内存压力”是系统给出的等级，比已用量更能反映是否不够用。",
@@ -122,6 +124,12 @@ pub(crate) fn settings(view: &View, blocks: &mut Vec<Block>) {
             "只会请你打开的应用像按 ⌘Q 一样正常退出：应用会先询问是否保存，不强制结束、不删除文件、不改系统设置。",
             "Optimize",
             "Only asks apps you opened to quit normally, like ⌘Q: they can ask you to save first. Nothing is force-quit, no files are deleted, no settings change.",
+        ),
+        (
+            "开始之前",
+            "每 30 秒记录一次已打开应用（含辅助进程）和较忙后台进程的内存与处理器用量，只在内存中保留约 10 分钟、不写入磁盘；用来说明问题开始前谁在上升，并发现持续 5 分钟占满一个核心的单个进程。",
+            "Before it started",
+            "Every 30 seconds Hostwatch notes the memory and CPU of each open app (with its helpers) and of busy background processes, kept in memory for about 10 minutes and never written to disk; it shows what was rising before an issue and catches a single process keeping a core busy for 5 minutes.",
         ),
         (
             "进程排行",
@@ -206,4 +214,121 @@ pub(crate) fn settings(view: &View, blocks: &mut Vec<Block>) {
         tr!(lang, "退出 Hostwatch", "Quit Hostwatch"),
         Command::Quit,
     )]));
+}
+
+fn on_off(lang: Lang, on: bool, enabled: bool, command: fn(bool) -> Command) -> Block {
+    Block::Choices(
+        [
+            (true, tr!(lang, "开", "On")),
+            (false, tr!(lang, "关", "Off")),
+        ]
+        .into_iter()
+        .map(|(value, title)| {
+            let mut button = Button::new(title, command(value));
+            button.primary = value == on;
+            button.enabled = enabled;
+            button
+        })
+        .collect(),
+    )
+}
+
+fn notifications(view: &View, blocks: &mut Vec<Block>) {
+    let lang = view.lang;
+    let state = view.monitor.integrations();
+    let available = state.access != NoticeAccess::Unavailable;
+    blocks.push(Block::Heading(tr!(lang, "通知", "Notifications").into()));
+    blocks.push(on_off(
+        lang,
+        state.notifications,
+        available,
+        Command::SetNotifications,
+    ));
+    let note = match (state.access, state.notifications) {
+        (NoticeAccess::Unavailable, _) => tr!(
+            lang,
+            "只有从 Hostwatch.app 打开时才能发通知；在终端运行 menubar 时不可用。",
+            "Notifications need Hostwatch.app; they are unavailable when menubar runs from a terminal."
+        ),
+        (_, false) => tr!(
+            lang,
+            "已关闭：问题只在菜单栏图标和面板中显示。",
+            "Off: issues show only in the menu bar icon and this panel."
+        ),
+        (NoticeAccess::Denied, true) => tr!(
+            lang,
+            "macOS 未允许 Hostwatch 发通知。可在“通知”设置中允许。",
+            "macOS does not allow Hostwatch to post notifications. You can allow it in Notifications settings."
+        ),
+        (NoticeAccess::NotAsked | NoticeAccess::Unknown, true) => tr!(
+            lang,
+            "正在等待 macOS 的通知授权；请在弹出的提示中选择“允许”。",
+            "Waiting for macOS notification permission; choose Allow when asked."
+        ),
+        (NoticeAccess::Allowed, true) => tr!(
+            lang,
+            "内存、交换、处理器或过热问题持续出现或加重时提醒一次，磁盘空间只在严重时提醒；同一问题 10 分钟内不重复，恢复不提醒。",
+            "Alerts once when a memory, swap, processor or heat issue persists or gets worse, and for disk space only when critical. The same issue does not repeat within 10 minutes; recovery is not announced."
+        ),
+    };
+    blocks.push(Block::Note(note.into()));
+    if state.notifications && state.access == NoticeAccess::Denied {
+        blocks.push(Block::Buttons(vec![Button::new(
+            open_tool_title(lang, Tool::NotificationSettings),
+            Command::Open(Tool::NotificationSettings),
+        )]));
+        tool_feedback(view, Tool::NotificationSettings, blocks);
+    }
+}
+
+fn open_at_login(view: &View, blocks: &mut Vec<Block>) {
+    let lang = view.lang;
+    let state = view.monitor.integrations();
+    let available = state.login != LoginItem::Unavailable;
+    blocks.push(Block::Heading(
+        tr!(lang, "登录时打开", "Open at login").into(),
+    ));
+    blocks.push(on_off(
+        lang,
+        matches!(state.login, LoginItem::On | LoginItem::NeedsApproval),
+        available,
+        Command::SetOpenAtLogin,
+    ));
+    let note = match state.login {
+        LoginItem::Unavailable => tr!(
+            lang,
+            "只有安装在“应用程序”中的 Hostwatch.app 才能设置；在终端运行 menubar 时不可用。",
+            "Needs Hostwatch.app in Applications; unavailable when menubar runs from a terminal."
+        ),
+        LoginItem::Off => tr!(
+            lang,
+            "关闭：重新登录后需要手动打开 Hostwatch，期间不会监测。",
+            "Off: after you log in again, Hostwatch is not monitoring until you open it."
+        ),
+        LoginItem::On => tr!(
+            lang,
+            "登录后 Hostwatch 自动在菜单栏开始监测。",
+            "Hostwatch starts monitoring in the menu bar when you log in."
+        ),
+        LoginItem::NeedsApproval => tr!(
+            lang,
+            "已登记，但在“登录项”设置中被关闭；在那里打开后才会生效。",
+            "Registered, but switched off in Login Items settings; turn it on there for it to take effect."
+        ),
+    };
+    blocks.push(Block::Note(note.into()));
+    if let Some(error) = &state.login_error {
+        blocks.push(Block::Note(tr!(
+            lang,
+            format!("上次更改失败：{error}"),
+            format!("The last change failed: {error}")
+        )));
+    }
+    if state.login == LoginItem::NeedsApproval || state.login_error.is_some() {
+        blocks.push(Block::Buttons(vec![Button::new(
+            open_tool_title(lang, Tool::LoginItemSettings),
+            Command::Open(Tool::LoginItemSettings),
+        )]));
+        tool_feedback(view, Tool::LoginItemSettings, blocks);
+    }
 }
