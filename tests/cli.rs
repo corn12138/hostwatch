@@ -72,11 +72,30 @@ fn snapshot_reports_rates_and_per_source_status() {
 
 #[cfg(target_os = "windows")]
 #[test]
-fn windows_returns_an_explicit_unsupported_error() {
-    let output = command().args(["snapshot", "--json"]).output().unwrap();
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Windows 适配尚未实现"));
+fn windows_snapshot_reports_real_sources_and_distinguishes_commit() {
+    let output = command()
+        .args(["snapshot", "--json", "--processes"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let s = &report["snapshot"];
+    assert_eq!(s["platform"], "windows");
+    assert_eq!(s["activity"]["status"], "ready");
+    let cpu = s["activity"]["cpu_busy_percent"].as_f64().unwrap();
+    assert!((0.0..=100.0).contains(&cpu));
+    assert!(s["memory"]["total_bytes"].as_u64().unwrap() > 0);
+    assert!(s["windows"]["commit_limit_bytes"].as_u64().unwrap() > 0);
+    assert!(s["memory"]["swap"].is_null());
+    assert!(s["activity"]["swap_in_bytes_per_second"].is_null());
+    assert!(!s["top_processes"].as_array().unwrap().is_empty());
+    for source in s["sources"].as_array().unwrap() {
+        assert_eq!(source["ok"], true, "{source}");
+    }
 }
 
 #[test]

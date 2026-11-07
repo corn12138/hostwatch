@@ -1,20 +1,31 @@
 #[cfg(any(target_os = "macos", test))]
 #[macro_use]
 mod lang;
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+// macOS counter derivation remains regression-tested.
 mod activity;
 mod advice;
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+// Some shared state is only rendered by AppKit.
 mod alerts;
 mod cli;
+#[cfg(target_os = "windows")]
+mod desktop;
 #[cfg(target_os = "macos")]
 mod menubar;
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 mod model;
 #[cfg(any(target_os = "macos", test))]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 mod monitor;
 #[cfg(any(target_os = "macos", test))]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 mod optimize;
 #[cfg(any(target_os = "macos", test))]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 mod panel;
 mod platform;
+mod storage;
 
 use std::{
     io::{self, Write},
@@ -43,6 +54,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(io::stdout(), "{}", cli::HELP)?;
         return Ok(());
     }
+    if args.first().is_some_and(|s| s == "analyze") {
+        return storage::run(&args[1..]);
+    }
+    if args.first().is_some_and(|s| s == "desktop") {
+        if args.len() != 1 {
+            return Err("desktop 不接受其他参数".into());
+        }
+        #[cfg(target_os = "windows")]
+        return desktop::run();
+        #[cfg(not(target_os = "windows"))]
+        return Err("desktop 仅适用于 Windows".into());
+    }
     let mut options = cli::parse(&args)?;
     // Double-clicking Hostwatch.app passes no arguments; the bundle is the menu-bar app.
     if args.is_empty()
@@ -53,8 +76,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if options.menubar {
         #[cfg(target_os = "macos")]
         return Ok(menubar::run(options.interval)?);
-        #[cfg(not(target_os = "macos"))]
-        return Err("菜单栏仅支持 macOS；Windows 托盘尚未实现。".into());
+        #[cfg(target_os = "windows")]
+        return desktop::run();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        return Err("菜单栏仅支持 macOS / Windows。".into());
     }
     let mut collector = platform::collector()?;
     if !options.watch {
@@ -137,7 +162,24 @@ fn render(out: &mut impl Write, report: &Report, history: Option<&History>) -> i
             writeln!(out, "   建议：{}", event.action)?;
         }
     }
-    match &memory.breakdown {
+    if let Some(windows) = &snapshot.windows {
+        writeln!(
+            out,
+            "内存：已用 {:.2} / {:.2} GiB | 可用 {:.2} GiB",
+            gib(windows.used_physical_bytes),
+            gib(memory.total_bytes),
+            gib(windows.available_physical_bytes)
+        )?;
+        if let (Some(used), Some(limit)) = (windows.commit_used_bytes, windows.commit_limit_bytes) {
+            writeln!(
+                out,
+                "提交量：{:.2} / {:.2} GiB（不是分页文件占用）",
+                gib(used),
+                gib(limit)
+            )?;
+        }
+    } else {
+        match &memory.breakdown {
         Some(b) => writeln!(
             out,
             "内存：已用 {:.2} / {:.2} GiB（应用 {:.2}，联动 {:.2}，压缩 {:.2}）| 缓存文件 {:.2} | 空闲 {:.2}",
@@ -151,6 +193,7 @@ fn render(out: &mut impl Write, report: &Report, history: Option<&History>) -> i
         )?,
         None => writeln!(out, "内存：总量 {:.2} GiB，分项不可用", gib(memory.total_bytes))?,
     }
+    }
     let swap = memory.swap.as_ref().map_or("不可用".to_string(), |s| {
         format!("{:.2} / {:.2} GiB", gib(s.used_bytes), gib(s.total_bytes))
     });
@@ -161,13 +204,16 @@ fn render(out: &mut impl Write, report: &Report, history: Option<&History>) -> i
             let cpu = activity
                 .cpu_busy_percent
                 .map_or("不可用".into(), |c| format!("{c:.0}%"));
+            let rate = |value: Option<f64>| {
+                value.map_or("未采集".into(), |v| format!("{:.1} MiB/s", mib(v)))
+            };
             writeln!(
                 out,
-                "活动（{:.0} 秒）：CPU {cpu} | 换入 {:.1} MiB/s | 换出 {:.1} MiB/s | 页面读入 {:.1} MiB/s",
+                "活动（{:.0} 秒）：CPU {cpu} | 换入 {} | 换出 {} | 页面读入 {}",
                 activity.interval_seconds.unwrap_or(0.0),
-                mib(activity.swap_in_bytes_per_second.unwrap_or(0.0)),
-                mib(activity.swap_out_bytes_per_second.unwrap_or(0.0)),
-                mib(activity.page_in_bytes_per_second.unwrap_or(0.0)),
+                rate(activity.swap_in_bytes_per_second),
+                rate(activity.swap_out_bytes_per_second),
+                rate(activity.page_in_bytes_per_second),
             )?
         }
         RateStatus::Warmup => writeln!(out, "活动：首个样本，下一次采样后计算速率")?,

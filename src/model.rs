@@ -136,9 +136,20 @@ pub struct SourceStatus {
 }
 
 #[derive(Debug, Serialize)]
+pub struct WindowsMetrics {
+    pub available_physical_bytes: u64,
+    pub used_physical_bytes: u64,
+    pub commit_used_bytes: Option<u64>,
+    pub commit_limit_bytes: Option<u64>,
+    pub system_cache_bytes: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Snapshot {
     pub unix_seconds: u64,
     pub platform: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows: Option<WindowsMetrics>,
     pub memory: Memory,
     pub activity: Activity,
     pub disk: Option<Disk>,
