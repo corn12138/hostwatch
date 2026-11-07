@@ -137,6 +137,7 @@ impl Collector for MacCollector {
         Ok(Snapshot {
             unix_seconds: stamp.wall.as_secs(),
             platform: "macos",
+            windows: None,
             memory: Memory {
                 total_bytes,
                 breakdown: vm.map(|vm| vm.breakdown),

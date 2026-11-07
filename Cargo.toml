@@ -1,15 +1,18 @@
 [package]
 name = "hostwatch"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.79"
-description = "Low-overhead, read-only host diagnostics; macOS first"
+description = "Host diagnostics and read-only Windows storage / migration planning"
 license = "MIT"
 publish = false
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

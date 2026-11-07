@@ -1,10 +1,24 @@
 # Hostwatch
 
-轻量电脑资源诊断工具，**Rust 实现，macOS 优先，Windows 预留**。包含命令行工具和原生菜单栏面板（Hostwatch.app）。
+轻量电脑资源诊断工具，**Rust 实现，支持 macOS 与 Windows**。包含命令行工具、macOS 原生菜单栏面板（Hostwatch.app）以及 Windows 原生桌面与托盘。
 
 这里的「运存 / 内存」均指 RAM；「磁盘空间」指持久存储。容量占满、内存压力和磁盘读写繁忙是不同问题，需要分开判断。
 
-## 现在能做什么
+## Windows 与 C 盘分析
+
+Windows 版本提供 CPU、物理内存、系统提交量、C 盘容量及进程工作集排行，并支持按需分析目录占用、大文件和迁移策略。
+
+```powershell
+.\windows\build.ps1 -Check
+.\dist\Hostwatch-Windows-0.4.0\Hostwatch-Windows.exe
+.\dist\Hostwatch-Windows-0.4.0\hostwatch.exe analyze --path C:\ --target D:\ --seconds 60 --json
+```
+
+磁盘扫描只读取元数据，默认限时 60 秒 / 30 万条目，跳过重解析点与云端占位文件，明确标记不可读内容及未完成扫描。迁移策略区分个人文件、开发缓存、应用数据与系统组件；仅生成带 `/L` 的 Robocopy 预演命令，不自动搬移或删除。逻辑长度不等于可回收空间，父子目录容量不能相加。
+
+Windows 的数据口径、桌面使用、打包方法和功能边界见 [Windows 文档](docs/windows.md)；测试结果见 [Windows 验证记录](docs/windows-validation.md)。下方的内存分项、交换速率、温度和菜单栏说明适用于 macOS。
+
+## macOS 现在能做什么
 
 - 原生采集物理内存分项（应用 / 联动 / 压缩 / 缓存文件 / 空闲）、swap 容量、内核内存压力、CPU 总体占用。
 - 按两次样本差分计算交换换入/换出、页面读入速率；识别首个样本、计数器重置、睡眠或时钟跳变，这些情况下不给速率。
@@ -19,9 +33,9 @@
 - 界面语言：默认跟随系统（macOS 首选语言中第一个中文或英文；其他语言显示英文），可在「设置 › 语言 · Language」手动切换为中文或 English，选择会被记住。命令行输出仍为中文。
 - 与系统对照：内存口径与活动监视器相同（已用 = 应用 + 联动 + 压缩，按 1024 进制）；磁盘按 10 亿字节为 1 GB，与「储存空间」设置一样包含系统可自动释放的空间；进程排行与活动监视器“内存”列同口径；处理器为两次采样之间的平均值，会与活动监视器的短间隔读数有起伏差异。
 
-目前没有系统通知、目录体积扫描、磁盘 I/O 诊断，不会自动删除文件或强制结束进程，也不开机自启；应用未经 Apple 公证。Windows 入口会明确返回「尚未实现」。
+目前没有系统通知或磁盘 I/O 诊断，不会自动删除文件或强制结束进程，也不开机自启；macOS 应用未经 Apple 公证。目录扫描与 Windows 功能见上方文档。
 
-## 运行
+## macOS 运行
 
 本地已用 Rust 1.79 验证；依赖版本由 `Cargo.lock` 固定。实测默认 watch 峰值 RSS 约 5.6 MiB、CPU 远低于 1%；菜单栏面板在本机（macOS 27.2，arm64，5 秒间隔）关闭时约 71–73 MiB RSS / 13.8 MB 物理内存足迹，打开时约 102 MiB / 33 MB，反复开合 200 次后约 118 MiB / 65 MB；均超出暂定的 40 MiB RSS 预算，改用足迹预算仍是待确认提议，详见 [validation.md](docs/validation.md)。
 
@@ -58,7 +72,7 @@
 
 其他普通路径中也可直接运行 `cargo run --locked --release`。
 
-## 指标与建议边界
+## macOS 指标与建议边界
 
 - 单位统一为 bytes；终端以 GiB / MiB 显示，JSON 用原始字节和 bytes/s。JSON 为 `schema_version: 2`，包含 Unix 秒时间戳、`activity.status`（`ready` / `warmup` / `counter_reset` / `sleep_gap` / `unavailable`）和 `sources` 逐项状态；只有 `watch` 输出 `events`。
 - 内存分项由 `host_statistics64` 页计数推导：已用 = 应用（内部页 − 可清除页）+ 联动 + 压缩；缓存文件 = 文件页 + 可清除页。这是接近活动监视器的估计口径，不保证逐项一致。
@@ -84,7 +98,9 @@
 结构（每个文件只做一件事，均在约 400 行以内，测试单独成文件）：
 
 ```text
-src/platform/      采集与平台隔离（macOS 实现，Windows 占位）
+src/platform/      采集与平台隔离（macOS / Windows 实现）
+src/storage/       有界目录扫描、迁移策略及测试
+windows/           Windows WPF 桌面宿主、构建与组件测试
 src/model.rs       数据模型（CLI JSON schema）
 src/activity.rs    计数器差分、睡眠 / 重置判定
 src/advice.rs      单样本规则

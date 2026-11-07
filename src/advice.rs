@@ -25,10 +25,19 @@ pub struct Finding {
     pub action: &'static str,
 }
 
+#[cfg(not(target_os = "windows"))]
 const MEMORY_ACTION: &str = "打开活动监视器 → 内存，查看高占用应用；先保存工作，再正常退出不需要的应用或浏览器标签。持续升高时再排查具体应用。";
+#[cfg(target_os = "windows")]
+const MEMORY_ACTION: &str = "打开任务管理器 → 进程，按内存排序；先保存工作，再正常退出不需要的应用。性能 → 内存中检查可用内存与已提交量，不要手动删除分页文件。";
 const SWAP_ACTION: &str = "系统正在频繁读写交换文件，这通常会直接导致卡顿：打开活动监视器 → 内存，按「内存」排序，关闭不需要的大型应用或标签页；不要手动删除交换文件。";
+#[cfg(not(target_os = "windows"))]
 const CPU_ACTION: &str = "打开活动监视器 → CPU，按「% CPU」排序找出持续占用的应用；确认无正在进行的工作后再正常退出。短时编译、索引或备份属于正常现象。";
+#[cfg(target_os = "windows")]
+const CPU_ACTION: &str = "打开任务管理器，按 CPU 排序定位持续占用的应用；保存工作后正常退出。短时编译、索引或备份属于正常现象。";
+#[cfg(not(target_os = "windows"))]
 const DISK_ACTION: &str = "打开系统设置 → 通用 → 储存空间，优先审查下载、大型文件和不用的应用；确认备份与用途后再手动删除。不要直接删除系统目录或交换文件。";
+#[cfg(target_os = "windows")]
+const DISK_ACTION: &str = "运行 C 盘分析，或打开设置 → 系统 → 存储，审查临时文件、大文件与不用的应用；个人文件优先通过文件夹的「位置」页迁移，不要直接搬移系统目录。";
 const THERMAL_ACTION: &str = "macOS 报告散热压力，已在降低性能保护硬件：保持通风、不要放在软垫上，退出不需要的高负载应用（活动监视器 → CPU）；持续过热请检查风扇与灰尘。";
 
 pub fn assess(snapshot: &Snapshot) -> Vec<Finding> {
@@ -43,11 +52,23 @@ pub fn assess(snapshot: &Snapshot) -> Vec<Finding> {
             } else {
                 Severity::Warning
             },
-            format!(
-                "内核内存压力 {:?}，交换空间已用 {:.2} GiB",
-                memory.pressure,
-                swap_used as f64 / GIB as f64
-            ),
+            if let Some(w) = &snapshot.windows {
+                format!(
+                    "Windows 内存余量启发式 {:?}：可用 {:.2} GiB，提交量 {}",
+                    memory.pressure,
+                    w.available_physical_bytes as f64 / GIB as f64,
+                    w.commit_used_bytes.map_or("不可用".into(), |b| format!(
+                        "{:.2} GiB",
+                        b as f64 / GIB as f64
+                    ))
+                )
+            } else {
+                format!(
+                    "内核内存压力 {:?}，交换空间已用 {:.2} GiB",
+                    memory.pressure,
+                    swap_used as f64 / GIB as f64
+                )
+            },
         ),
         Pressure::Normal => Observation::Clear,
         Pressure::Unknown => Observation::Unknown,
@@ -179,7 +200,7 @@ pub fn evaluate(snapshot: &Snapshot) -> Vec<Advice> {
             id: "memory_unknown",
             severity: Severity::Info,
             evidence: "未能取得内核内存压力，不能判断是否存在内存瓶颈。".into(),
-            action: "打开活动监视器 → 内存，人工确认内存压力曲线。",
+            action: MEMORY_ACTION,
         });
     }
     // Health is claimed only for the core signals that were actually measured.
@@ -223,6 +244,7 @@ pub mod tests {
         Snapshot {
             unix_seconds: 0,
             platform: "test",
+            windows: None,
             memory: Memory {
                 total_bytes: 16 * GIB,
                 breakdown: None,

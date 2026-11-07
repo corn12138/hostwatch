@@ -9,12 +9,14 @@ pub struct Options {
     pub count: Option<u64>,
 }
 
-pub const HELP: &str = "hostwatch — macOS 只读资源诊断（Windows 预留）
+pub const HELP: &str = "hostwatch — Windows / macOS 资源诊断与磁盘策略
 
 用法：
   hostwatch [snapshot] [--json] [--processes]
   hostwatch watch [--interval 秒] [--count 次数] [--json] [--processes]
   hostwatch menubar [--interval 秒]
+  hostwatch desktop
+  hostwatch analyze [--path C:\\] [--target D:\\] [--seconds 60] [--max-entries 300000] [--json]
 
 默认每 30 秒采集；间隔范围 5–3600 秒；Ctrl+C 停止。
 --processes  附带可读取进程的 RSS 前五名（额外采集成本）
@@ -22,6 +24,9 @@ pub const HELP: &str = "hostwatch — macOS 只读资源诊断（Windows 预留�
 --count      有限采样次数，正整数；省略则持续运行
 menubar      macOS 菜单栏常驻（无 Dock 图标）；面板内可改间隔、暂停、退出
              从 Hostwatch.app 无参数启动时等同于 menubar
+desktop      Windows 原生桌面与托盘；Hostwatch-Windows.exe 可直接双击打开
+analyze      只读扫描目录占用、大文件与清理/迁移建议；默认 C 盘，60 秒 / 30 万条目
+--target     其他固定磁盘的绝对路径；仅生成带 /L 的 Robocopy 预演，不执行搬移
 
 本工具不会自动清理文件、终止进程或安装后台服务。";
 

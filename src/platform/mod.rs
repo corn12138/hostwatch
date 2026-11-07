@@ -3,7 +3,7 @@ use crate::model::Snapshot;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
-mod windows;
+pub mod windows;
 
 #[cfg(target_os = "macos")]
 pub use macos::{process_table, scan_processes, ProcTable, RankBy};
